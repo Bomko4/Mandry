@@ -437,8 +437,9 @@ async def process_phone(message: types.Message, state: FSMContext):
     reply_keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
             [types.KeyboardButton(text="📚 Забронювати"), types.KeyboardButton(text="❌ Скасувати бронювання")],
-            [types.KeyboardButton(text="🍽️ Меню"), types.KeyboardButton(text="📞 Контакти")],
-            [types.KeyboardButton(text="📋 Правила користування"), types.KeyboardButton(text="🚨 Краш ліст")] 
+            [types.KeyboardButton(text="📋 Правила користування"), types.KeyboardButton(text="🚨 Краш ліст")],
+            [types.KeyboardButton(text="🍽️ Меню")],
+            [types.KeyboardButton(text="📞 Контакти")]
         ],
         resize_keyboard=True
     )
