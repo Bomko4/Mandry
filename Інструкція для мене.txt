@@ -1,0 +1,119 @@
+Hetzner VPS для хостингу
+
+Створи групу персоналу.
+Додай туди бота.
+Напиши будь-яке повідомлення в групу.
+Відкрий у браузері:
+https://api.telegram.org/bot<ТВіЙ_ТОКЕН>/getUpdates бот має бути зупинений
+Знайди в JSON поле chat.id цієї групи (зазвичай від’ємне число, починається з -100...).
+Постав це значення в STAFF_CHAT_ID.
+Додай відправку повідомлення після успішного бронювання.
+
+1. Створи сервер у Hetzner
+
+Зайди в Hetzner Cloud Console.
+New Project → Add Server.
+Image: Ubuntu 24.04.
+Type: CX22 (2 vCPU, 4 GB) або CX11 (1 vCPU, 2 GB).
+Для твого бота вистачить навіть CX11.
+Region: Falkenstein або Helsinki.
+Додай SSH key (обов’язково).
+Create & Buy now.
+
+2. Перший вхід і базова безпека
+Підключення:
+ssh root@YOUR_SERVER_IP
+
+Оновлення:
+apt update
+apt upgrade -y
+
+Створи окремого користувача:
+adduser botuser
+usermod -aG sudo botuser
+
+Налаштуй firewall:
+ufw allow OpenSSH
+ufw enable
+ufw status
+
+Після цього краще працювати не під root:
+su - botuser
+
+3. Встанови все потрібне
+Під botuser:
+sudo apt install -y python3 python3-venv python3-pip git
+
+Створи папку проєкту:
+mkdir -p /home/botuser/mandry
+cd /home/botuser/mandry
+
+4. Завантаж код на сервер
+Варіант A (через git):
+git clone YOUR_REPO_URL .
+
+Варіант B (локально з ПК через scp):
+scp -r d:/Mandry/* botuser@YOUR_SERVER_IP:/home/botuser/mandry/
+
+5. Віртуальне середовище і залежності
+cd /home/botuser/mandry
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install aiogram gspread google-auth
+
+Якщо зробиш requirements.txt, краще ставити так:
+pip install -r requirements.txt
+
+6. Винеси секрети з коду (дуже важливо)
+Зараз у тебе секрети були в коді/файлі ключа. Це потрібно виправити:
+
+Перевипусти Telegram token через BotFather.
+Перегенеруй Google service account key.
+Старі ключі видали/деактивуй.
+Далі використовуй змінні середовища:
+
+BOT_TOKEN
+STAFF_CHAT_ID
+SHEET_NAME
+GOOGLE_APPLICATION_CREDENTIALS
+7. Зроби systemd-сервіс
+Створи unit:
+sudo nano /etc/systemd/system/mandry-bot.service
+
+Вміст:
+[Unit]
+Description=Mandry Telegram Bot
+After=network.target
+
+Активуй:
+sudo systemctl daemon-reload
+sudo systemctl enable mandry-bot
+sudo systemctl start mandry-bot
+sudo systemctl status mandry-bot
+
+8. Логи та контроль
+Живі логи:
+sudo journalctl -u mandry-bot -f
+
+Рестарт:
+sudo systemctl restart mandry-bot
+
+Стоп/старт:
+sudo systemctl stop mandry-bot
+sudo systemctl start mandry-bot
+
+9. Оновлення бота без болю
+Коли змінив код:
+cd /home/botuser/mandry
+git pull
+source .venv/bin/activate
+pip install -r requirements.txt
+sudo systemctl restart mandry-bot
+
+10. Рекомендую одразу доробити
+
+Винести всі константи в env.
+Додати requirements.txt.
+Додати простий healthcheck-скрипт або хоча б перевірку статусу через cron.
+Увімкнути Hetzner snapshots (1 клік бекап перед великими змінами).
