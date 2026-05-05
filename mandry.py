@@ -2,6 +2,8 @@ import asyncio
 import gspread
 import socket
 import random
+import os
+from dotenv import load_dotenv
 from google.auth.exceptions import RefreshError
 
 socket.setdefaulttimeout(10)
@@ -12,10 +14,32 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-TOKEN = "7750596802:AAHlQ2gCCIxeWSjmu2wk7l6BigSP41sgxUU"
-SHEET_NAME = "Мандри бронь"
-MENU_URL = "https://mandry-sup.choiceqr.com/menu?fbclid=PAdGRleAQvo3hleHRuA2FlbQIxMQABpyHGzMZ2j68WOIA7gDKCuCqXp30fz7ITK-gRUKSmhmg5-lJYxrIhrYtnu0A0_aem_1Qlu08flvE4mnL3TsIC_pw"
-STAFF_CHAT_ID = -1003788282371
+load_dotenv()
+
+def get_required_env(name: str) -> str:
+    value = os.getenv(name)
+    if value:
+        return value
+    raise SystemExit(f"Не задано обов'язкову змінну середовища: {name}")
+
+
+TOKEN = get_required_env("BOT_TOKEN")
+SHEET_NAME = os.getenv("SHEET_NAME", "Мандри бронь")
+MENU_URL = os.getenv(
+    "MENU_URL",
+    "https://mandry-sup.choiceqr.com/menu?fbclid=PAdGRleAQvo3hleHRuA2FlbQIxMQABpyHGzMZ2j68WOIA7gDKCuCqXp30fz7ITK-gRUKSmhmg5-lJYxrIhrYtnu0A0_aem_1Qlu08flvE4mnL3TsIC_pw",
+)
+
+staff_chat_id_raw = os.getenv("STAFF_CHAT_ID")
+if staff_chat_id_raw:
+    try:
+        STAFF_CHAT_ID = int(staff_chat_id_raw)
+    except ValueError as err:
+        raise SystemExit("STAFF_CHAT_ID має бути числом, наприклад -1001234567890") from err
+else:
+    STAFF_CHAT_ID = None
+
+GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
 
 COLUMNS = [
     "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий",
@@ -51,13 +75,13 @@ EQUIPMENT_COLUMN_GROUPS = {
 }
 
 try:
-    gc = gspread.service_account(filename='credentials.json')
+    gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_PATH)
     sh = gc.open(SHEET_NAME)
 except RefreshError as err:
     raise SystemExit(
         "\nПомилка авторизації Google Service Account: invalid_grant (account not found).\n"
         "Що перевірити:\n"
-        "1) У credentials.json поле client_email має існувати в Google Cloud IAM.\n"
+        f"1) У {GOOGLE_CREDENTIALS_PATH} поле client_email має існувати в Google Cloud IAM.\n"
         "2) Якщо service account видалений/перейменований - створіть новий ключ JSON.\n"
         "3) Увімкніть Google Drive API та Google Sheets API в тому самому проєкті.\n"
         "4) Відкрийте таблицю для client_email (доступ Editor).\n"
@@ -298,10 +322,11 @@ async def process_cancel_booking(message: types.Message, state: FSMContext):
         f"Клієнт: {booking_name if booking_name else 'Невідомо'}\n"
         f"Очищено слотів: {cleared_count}"
     )
-    try:
-        await bot.send_message(chat_id=STAFF_CHAT_ID, text=cancel_notify)
-    except Exception:
-        pass
+    if STAFF_CHAT_ID is not None:
+        try:
+            await bot.send_message(chat_id=STAFF_CHAT_ID, text=cancel_notify)
+        except Exception:
+            pass
 
     await message.answer(f"✅ Бронювання {code} скасовано.")
     await state.clear()
@@ -444,10 +469,11 @@ async def process_phone(message: types.Message, state: FSMContext):
         f"Клієнт: {client_name}\n"
         f"Телефон: {phone}"
     )
-    try:
-        await bot.send_message(chat_id=STAFF_CHAT_ID, text=notify_text)
-    except Exception:
-        pass
+    if STAFF_CHAT_ID is not None:
+        try:
+            await bot.send_message(chat_id=STAFF_CHAT_ID, text=notify_text)
+        except Exception:
+            pass
 
     reply_keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
