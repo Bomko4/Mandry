@@ -18,8 +18,8 @@ MENU_URL = "https://mandry-sup.choiceqr.com/menu?fbclid=PAdGRleAQvo3hleHRuA2FlbQ
 STAFF_CHAT_ID = -1003788282371
 
 COLUMNS = [
-    "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий",
-    "Сап червоний", "Сап червоний", "Сап червоний",
+    "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий",
+    "Сап червоний", "Сап червоний", "Сап червоний", "Сап червоний", "Сап червоний", "Сап червоний", "Сап червоний", "Сап червоний",
     "Сап Оранжевий", "Сап Оранжевий",
     "Каяк двомісний", "Каяк одномісний"
 ]
@@ -258,10 +258,26 @@ async def show_rules(message: types.Message):
 
 @dp.message(F.text == "🚨 Краш ліст")
 async def show_crash_list(message: types.Message):
-    await message.answer(
-        "🚨 Краш ліст:\n\n"
-        ":"
+    crash_list_text = (
+        "🚨 <b>КРАШ ЛІСТ</b> - Ціна відшкодування\n\n"
+        "<b>Надувні SUP дошки:</b>\n"
+        "• AQUA MARINA MONSTER BT-21 - \n15 500 грн\n"
+        "• AQUA MARINA MONSTER BT-23 - \n15 500 грн\n"
+        "• AQUA MARINA PURE AIR - 9 100 грн\n\n"
+        "<b>Надувні каяки:</b>\n"
+        "• Aqua Marina BETTA BE-312 - 12 300 грн\n"
+        "• Aqua Marina LAXO LA-380 - 17 700 грн\n\n"
+        "<b>Аксесуари:</b>\n"
+        "• Весло під сапборд - 2 200 грн\n"
+        "• Весло під каяк - 2 800 грн\n"
+        "• Плавник під сап-дошку - 600 грн\n"
+        "• Плавник до каяка - 700 грн\n"
+        "• Сидіння до каяка - 1 200 грн\n"
+        "• Гермомішок - 400 грн\n"
+        "• Страхувальний лиш для SUP - 650 грн\n\n"
+        "<i>У разі пошкодження обладнання до вас буде застосована відповідна компенсація.</i>"
     )
+    await message.answer(crash_list_text, parse_mode="HTML")
 
 @dp.message(Booking.cancel_code)
 async def process_cancel_booking(message: types.Message, state: FSMContext):
@@ -297,7 +313,6 @@ async def process_date(callback: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="1 година", callback_data="dur_1"))
     builder.row(types.InlineKeyboardButton(text="2 години", callback_data="dur_2"))
-    builder.row(types.InlineKeyboardButton(text="3 години", callback_data="dur_3"))
 
     await callback.message.edit_text("Скільки часу хочете плавати?", reply_markup=builder.as_markup())
     await state.set_state(Booking.duration)
