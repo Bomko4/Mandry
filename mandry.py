@@ -236,13 +236,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def start_booking_from_menu(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
     now = datetime.now()
-    today = now.strftime("%d.%m")
-    tomorrow = (now + timedelta(days=1)).strftime("%d.%m")
-    day_after = (now + timedelta(days=2)).strftime("%d.%m")
-
-    builder.row(types.InlineKeyboardButton(text=today, callback_data=f"date_{today}"))
-    builder.row(types.InlineKeyboardButton(text=tomorrow, callback_data=f"date_{tomorrow}"))
-    builder.row(types.InlineKeyboardButton(text=day_after, callback_data=f"date_{day_after}"))
+    for day_offset in range(7):
+        date_label = (now + timedelta(days=day_offset)).strftime("%d.%m")
+        builder.row(types.InlineKeyboardButton(text=date_label, callback_data=f"date_{date_label}"))
 
     await message.answer("Оберіть дату:", reply_markup=builder.as_markup())
     await state.set_state(Booking.date)
@@ -263,7 +259,8 @@ async def start_cancel_booking(message: types.Message, state: FSMContext):
 async def show_contacts(message: types.Message):
     await message.answer(
         "Контакти:\n"
-        "Телефон: <a href='tel:+380123456789'>+380 12 345 67 89</a>\n"
+        "Телефон: <a href='tel:+380989055753'>+380 98 905 57 53</a>\n"
+        "Пошта: <a href='mailto:mandry70625@gmail.com'>mandry70625@gmail.com</a>\n"
         "Inst: <a href='https://www.instagram.com/mandry.sup/'>@mandry.sup</a>",
         parse_mode="HTML"
     )
