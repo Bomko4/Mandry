@@ -5,6 +5,7 @@ import random
 import os
 from dotenv import load_dotenv
 from google.auth.exceptions import RefreshError
+from zoneinfo import ZoneInfo
 
 socket.setdefaulttimeout(10)
 from datetime import datetime, timedelta
@@ -40,6 +41,7 @@ else:
     STAFF_CHAT_ID = None
 
 GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
+APP_TIMEZONE = ZoneInfo(os.getenv("BOT_TIMEZONE", "Europe/Kyiv"))
 
 COLUMNS = [
     "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий",
@@ -171,6 +173,10 @@ def build_time_window(start_index: int, duration: int) -> str:
     return f"{start_time}-{end_time}"
 
 
+def get_current_time() -> datetime:
+    return datetime.now(APP_TIMEZONE)
+
+
 def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int, duration: int):
     preferred_names = EQUIPMENT_COLUMN_GROUPS[requested_equipment]
     preferred_col = find_free_column_for_duration(
@@ -235,7 +241,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(F.text == "📚 Забронювати")
 async def start_booking_from_menu(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
-    now = datetime.now()
+    now = get_current_time()
     for day_offset in range(7):
         date_label = (now + timedelta(days=day_offset)).strftime("%d.%m")
         builder.row(types.InlineKeyboardButton(text=date_label, callback_data=f"date_{date_label}"))
@@ -358,8 +364,9 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     duration = int(data.get('duration', 1))
     selected_date = data.get('date')
-    today_str = datetime.now().strftime("%d.%m")
-    now_time = datetime.now().time()
+    current_time = get_current_time()
+    today_str = current_time.strftime("%d.%m")
+    now_time = current_time.time()
 
     builder = InlineKeyboardBuilder()
     max_start_index = len(TIME_SLOTS) - duration
