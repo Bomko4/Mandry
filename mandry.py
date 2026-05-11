@@ -93,6 +93,9 @@ except RefreshError as err:
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# Активні таски нагадувань за кодом бронювання.
+reminder_tasks: dict[str, asyncio.Task] = {}
+
 class Booking(StatesGroup):
     date = State()
     duration = State()
@@ -101,6 +104,118 @@ class Booking(StatesGroup):
     name = State()
     phone = State()
     cancel_code = State()
+
+
+def parse_booking_datetime(date_str: str, start_time_str: str) -> datetime:
+    now = get_current_time()
+    day = datetime.strptime(date_str, "%d.%m")
+    start_time = datetime.strptime(start_time_str, "%H:%M")
+    booking_dt = datetime(
+        year=now.year,
+        month=day.month,
+        day=day.day,
+        hour=start_time.hour,
+        minute=start_time.minute,
+        tzinfo=APP_TIMEZONE,
+    )
+    if booking_dt < now - timedelta(days=1):
+        booking_dt = booking_dt.replace(year=now.year + 1)
+    return booking_dt
+
+
+def cancel_reminder_task(booking_code: str):
+    task = reminder_tasks.pop(booking_code, None)
+    if task and not task.done():
+        task.cancel()
+
+
+async def send_reminder(
+    user_chat_id: int,
+    booking_code: str,
+    booking_date: str,
+    booking_window: str,
+    actual_equipment: str,
+    equipment_note: str,
+):
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(
+            text="✅ Так, все в силі",
+            callback_data=f"rem_yes_{booking_code}",
+        )
+    )
+    builder.row(
+        types.InlineKeyboardButton(
+            text="❌ Ні, передумав",
+            callback_data=f"rem_no_{booking_code}",
+        )
+    )
+
+    await bot.send_message(
+        chat_id=user_chat_id,
+        text=(
+            "⏰ Нагадування про бронювання\n"
+            f"Код: {booking_code}\n"
+            f"Дата: {booking_date}\n"
+            f"Час: {booking_window}\n"
+            f"Обладнання: {actual_equipment} {equipment_note}".rstrip()
+        ),
+        reply_markup=builder.as_markup(),
+    )
+
+
+async def reminder_worker(
+    user_chat_id: int,
+    booking_code: str,
+    booking_date: str,
+    booking_window: str,
+    actual_equipment: str,
+    equipment_note: str,
+):
+    try:
+        start_time_str = booking_window.split("-")[0]
+        booking_start_dt = parse_booking_datetime(booking_date, start_time_str)
+        reminder_dt = booking_start_dt - timedelta(hours=2)
+        delay_seconds = (reminder_dt - get_current_time()).total_seconds()
+
+        if delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
+
+        await send_reminder(
+            user_chat_id=user_chat_id,
+            booking_code=booking_code,
+            booking_date=booking_date,
+            booking_window=booking_window,
+            actual_equipment=actual_equipment,
+            equipment_note=equipment_note,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass
+    finally:
+        reminder_tasks.pop(booking_code, None)
+
+
+def schedule_booking_reminder(
+    user_chat_id: int,
+    booking_code: str,
+    booking_date: str,
+    booking_window: str,
+    actual_equipment: str,
+    equipment_note: str,
+):
+    cancel_reminder_task(booking_code)
+    reminder_tasks[booking_code] = asyncio.create_task(
+        reminder_worker(
+            user_chat_id=user_chat_id,
+            booking_code=booking_code,
+            booking_date=booking_date,
+            booking_window=booking_window,
+            actual_equipment=actual_equipment,
+            equipment_note=equipment_note,
+        )
+    )
 
 
 def booking_code_exists(code: str) -> bool:
@@ -242,9 +357,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def start_booking_from_menu(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
     now = get_current_time()
-    for day_offset in range(7):
-        date_label = (now + timedelta(days=day_offset)).strftime("%d.%m")
-        builder.row(types.InlineKeyboardButton(text=date_label, callback_data=f"date_{date_label}"))
+    left_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(7)]
+    right_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(7, 14)]
+
+    for left_date, right_date in zip(left_column_dates, right_column_dates):
+        builder.row(
+            types.InlineKeyboardButton(text=left_date, callback_data=f"date_{left_date}"),
+            types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
+        )
 
     await message.answer("Оберіть дату:", reply_markup=builder.as_markup())
     await state.set_state(Booking.date)
@@ -319,6 +439,8 @@ async def process_cancel_booking(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
+    cancel_reminder_task(code)
+
     cancel_notify = (
         "Скасування бронювання!\n"
         f"Код: {code}\n"
@@ -333,6 +455,40 @@ async def process_cancel_booking(message: types.Message, state: FSMContext):
 
     await message.answer(f"✅ Бронювання {code} скасовано.")
     await state.clear()
+
+
+@dp.callback_query(F.data.startswith("rem_yes_"))
+async def process_reminder_yes(callback: types.CallbackQuery):
+    await callback.message.edit_text("Дякуємо за підтвердження. Чекаємо вас.")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("rem_no_"))
+async def process_reminder_no(callback: types.CallbackQuery):
+    code = callback.data.split("_", 2)[2]
+    cleared_count, _ = find_and_clear_booking_by_code(code)
+    cancel_reminder_task(code)
+
+    if cleared_count == 0:
+        await callback.message.edit_text("❌ Бронювання вже неактуальне або не знайдено.")
+        await callback.answer()
+        return
+
+    if STAFF_CHAT_ID is not None:
+        try:
+            await bot.send_message(
+                chat_id=STAFF_CHAT_ID,
+                text=(
+                    "Скасування з нагадування!\n"
+                    f"Код: {code}\n"
+                    "Клієнт натиснув: Ні, передумав"
+                ),
+            )
+        except Exception:
+            pass
+
+    await callback.message.edit_text("✅ Бронювання скасовано. Якщо захочете, можете створити нове у головному меню.")
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("date_"))
 async def process_date(callback: types.CallbackQuery, state: FSMContext):
@@ -450,8 +606,9 @@ async def process_phone(message: types.Message, state: FSMContext):
     booking_code = generate_booking_code()
     actual_equipment = data.get('actual_equipment', data['equipment'])
     equipment_note = data.get('equipment_note', '')
+    user_chat_id = message.chat.id
 
-    booking_lines = [f"ID:{booking_code}", client_name, phone]
+    booking_lines = [f"ID:{booking_code}", client_name, phone, f"CHAT:{user_chat_id}"]
     if equipment_note:
         booking_lines.append(equipment_note)
     booking_value = "\n".join(booking_lines)
@@ -462,6 +619,15 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     start_slot_index = data['time_row'] - 2
     booking_window = build_time_window(start_slot_index, duration)
+
+    schedule_booking_reminder(
+        user_chat_id=user_chat_id,
+        booking_code=booking_code,
+        booking_date=data['date'],
+        booking_window=booking_window,
+        actual_equipment=actual_equipment,
+        equipment_note=equipment_note,
+    )
 
     notify_text = (
         "Нове бронювання!\n"
