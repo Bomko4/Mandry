@@ -354,11 +354,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     await message.answer("Головне меню:", reply_markup=reply_keyboard)
 
-
-@dp.message(Command("restart"))
-async def cmd_restart(message: types.Message, state: FSMContext):
-    await cmd_start(message, state)
-
 @dp.message(F.text == "📚 Забронювати")
 async def start_booking_from_menu(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
@@ -674,7 +669,6 @@ async def process_phone(message: types.Message, state: FSMContext):
 async def main():
     await bot.set_my_commands([
         BotCommand(command="start", description="Bot Restart"),
-        BotCommand(command="restart", description="Швидкий рестарт бота"),
     ])
     await dp.start_polling(bot)
 
