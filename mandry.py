@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 socket.setdefaulttimeout(10)
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import BotCommand
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -353,6 +354,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     await message.answer("Головне меню:", reply_markup=reply_keyboard)
 
+
+@dp.message(Command("restart"))
+async def cmd_restart(message: types.Message, state: FSMContext):
+    await cmd_start(message, state)
+
 @dp.message(F.text == "📚 Забронювати")
 async def start_booking_from_menu(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder()
@@ -608,7 +614,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     equipment_note = data.get('equipment_note', '')
     user_chat_id = message.chat.id
 
-    booking_lines = [f"ID:{booking_code}", client_name, phone, f"CHAT:{user_chat_id}"]
+    booking_lines = [f"ID:{booking_code}", client_name, phone]
     if equipment_note:
         booking_lines.append(equipment_note)
     booking_value = "\n".join(booking_lines)
@@ -666,6 +672,10 @@ async def process_phone(message: types.Message, state: FSMContext):
     await state.clear()
 
 async def main():
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Bot Restart"),
+        BotCommand(command="restart", description="Швидкий рестарт бота"),
+    ])
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
