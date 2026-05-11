@@ -324,6 +324,21 @@ def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int
 
     return None
 
+def has_dash_reserved_slots(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
+    """Check if all requested slots are marked with '-' (reserved for live queue)"""
+    for col in target_cols:
+        all_dashes = True
+        for offset in range(duration):
+            current_row_idx = row_idx + offset
+            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
+            cell_value = current_row_data[col - 1].strip() if col - 1 < len(current_row_data) else ""
+            if cell_value != "-":
+                all_dashes = False
+                break
+        if all_dashes:
+            return True
+    return False
+
 def get_or_create_sheet(date_str):
     try:
         return sh.worksheet(date_str)
@@ -525,9 +540,14 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
     today_str = current_time.strftime("%d.%m")
     now_time = current_time.time()
 
+    ws = get_or_create_sheet(selected_date)
+    all_values = ws.get_all_values()
+    
     builder = InlineKeyboardBuilder()
     max_start_index = len(TIME_SLOTS) - duration
     available_slots = 0
+    has_live_queue = False
+    
     for start_index in range(max_start_index + 1):
         start_time_str = TIME_SLOTS[start_index].split('-')[0]
         start_time = datetime.strptime(start_time_str, "%H:%M").time()
@@ -539,7 +559,26 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
         available_slots += 1
 
     if available_slots == 0:
-        await callback.message.edit_text("На сьогодні вільні часові слоти вже завершилися. Оберіть іншу дату.")
+        # Check if slots are reserved with '-' for live queue
+        preferred_names = EQUIPMENT_COLUMN_GROUPS[data['equipment']]
+        target_cols = get_target_columns_for_names(preferred_names)
+        
+        # Check all time slots to see if any have dashes
+        for start_index in range(max_start_index + 1):
+            start_time_str = TIME_SLOTS[start_index].split('-')[0]
+            start_time = datetime.strptime(start_time_str, "%H:%M").time()
+            if selected_date == today_str and start_time <= now_time:
+                continue
+                
+            row_idx = start_index + 2
+            if has_dash_reserved_slots(all_values, row_idx, duration, target_cols):
+                has_live_queue = True
+                break
+        
+        if has_live_queue:
+            await callback.message.edit_text("Решта сапів для живої черги")
+        else:
+            await callback.message.edit_text("На сьогодні вільні часові слоти вже завершилися. Оберіть іншу дату.")
         await state.clear()
         return
 
