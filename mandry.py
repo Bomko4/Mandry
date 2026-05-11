@@ -602,12 +602,17 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
         if selected_date == today_str and start_time <= now_time:
             continue
 
-        window_label = build_time_window(start_index, duration)
-        builder.row(types.InlineKeyboardButton(text=window_label, callback_data=f"tmidx_{start_index}"))
-        available_slots += 1
+        row_idx = start_index + 2
+        # Check if there's a free spot for this time slot
+        booking_resolution = resolve_equipment_booking(data['equipment'], all_values, row_idx, duration)
+        if booking_resolution:
+            window_label = build_time_window(start_index, duration)
+            builder.row(types.InlineKeyboardButton(text=window_label, callback_data=f"tmidx_{start_index}"))
+            available_slots += 1
 
     if available_slots == 0:
         # Check if all non-dash columns are occupied
+        all_occupied = False
         for start_index in range(max_start_index + 1):
             start_time_str = TIME_SLOTS[start_index].split('-')[0]
             start_time = datetime.strptime(start_time_str, "%H:%M").time()
@@ -616,11 +621,13 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
                 
             row_idx = start_index + 2
             if are_all_non_dash_columns_occupied(all_values, row_idx, duration, target_cols):
-                await callback.message.edit_text("Бронювання далі недоступне, тільки жива черга")
-                await state.clear()
-                return
+                all_occupied = True
+                break
         
-        await callback.message.edit_text("На сьогодні вільні часові слоти вже завершилися. Оберіть іншу дату.")
+        if all_occupied:
+            await callback.message.edit_text("Бронювання далі недоступне, тільки жива черга")
+        else:
+            await callback.message.edit_text("На сьогодні вільні часові слоти вже завершилися. Оберіть іншу дату.")
         await state.clear()
         return
 
