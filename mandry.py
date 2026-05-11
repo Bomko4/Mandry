@@ -341,6 +341,50 @@ def has_dash_reserved_slots(all_values, row_idx: int, duration: int, target_cols
     
     return True
 
+def get_non_dash_columns(all_values, row_idx: int, duration: int, target_cols: list[int]) -> list[int]:
+    """Get columns that are NOT marked with '-'"""
+    non_dash_cols = []
+    
+    for col in target_cols:
+        has_dash = False
+        for offset in range(duration):
+            current_row_idx = row_idx + offset
+            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
+            cell_value = current_row_data[col - 1].strip() if col - 1 < len(current_row_data) else ""
+            if cell_value == "-":
+                has_dash = True
+                break
+        if not has_dash:
+            non_dash_cols.append(col)
+    
+    return non_dash_cols
+
+def are_all_non_dash_columns_occupied(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
+    """Check if all non-dash columns are occupied (have content)"""
+    non_dash_cols = get_non_dash_columns(all_values, row_idx, duration, target_cols)
+    
+    if not non_dash_cols:
+        # All columns are marked with "-", so they're reserved for live queue
+        return False
+    
+    # Check if all non-dash columns are occupied
+    for col in non_dash_cols:
+        is_column_occupied = True
+        for offset in range(duration):
+            current_row_idx = row_idx + offset
+            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
+            cell_value = current_row_data[col - 1].strip() if col - 1 < len(current_row_data) else ""
+            if not cell_value:
+                # Found an empty cell in this column
+                is_column_occupied = False
+                break
+        if not is_column_occupied:
+            # Found a column that's not fully occupied
+            return False
+    
+    # All non-dash columns are fully occupied
+    return True
+
 def get_or_create_sheet(date_str):
     try:
         return sh.worksheet(date_str)
@@ -548,7 +592,9 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     max_start_index = len(TIME_SLOTS) - duration
     available_slots = 0
-    has_live_queue = False
+    
+    preferred_names = EQUIPMENT_COLUMN_GROUPS[data['equipment']]
+    target_cols = get_target_columns_for_names(preferred_names)
     
     for start_index in range(max_start_index + 1):
         start_time_str = TIME_SLOTS[start_index].split('-')[0]
@@ -561,11 +607,7 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
         available_slots += 1
 
     if available_slots == 0:
-        # Check if slots are reserved with '-' for live queue
-        preferred_names = EQUIPMENT_COLUMN_GROUPS[data['equipment']]
-        target_cols = get_target_columns_for_names(preferred_names)
-        
-        # Check all time slots to see if any have dashes
+        # Check if all non-dash columns are occupied
         for start_index in range(max_start_index + 1):
             start_time_str = TIME_SLOTS[start_index].split('-')[0]
             start_time = datetime.strptime(start_time_str, "%H:%M").time()
@@ -573,14 +615,12 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
                 continue
                 
             row_idx = start_index + 2
-            if has_dash_reserved_slots(all_values, row_idx, duration, target_cols):
-                has_live_queue = True
-                break
+            if are_all_non_dash_columns_occupied(all_values, row_idx, duration, target_cols):
+                await callback.message.edit_text("Бронювання далі недоступне, тільки жива черга")
+                await state.clear()
+                return
         
-        if has_live_queue:
-            await callback.message.edit_text("Решта сапів для живої черги")
-        else:
-            await callback.message.edit_text("На сьогодні вільні часові слоти вже завершилися. Оберіть іншу дату.")
+        await callback.message.edit_text("На сьогодні вільні часові слоти вже завершилися. Оберіть іншу дату.")
         await state.clear()
         return
 
