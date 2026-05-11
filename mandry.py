@@ -325,19 +325,21 @@ def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int
     return None
 
 def has_dash_reserved_slots(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
-    """Check if all requested slots are marked with '-' (reserved for live queue)"""
+    """Check if all target columns are marked with '-' (reserved for live queue)"""
+    if not target_cols:
+        return False
+    
+    # Check that ALL cells in ALL target columns (for the duration) are "-"
     for col in target_cols:
-        all_dashes = True
         for offset in range(duration):
             current_row_idx = row_idx + offset
             current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
             cell_value = current_row_data[col - 1].strip() if col - 1 < len(current_row_data) else ""
+            # If any cell is not "-", then it's not all reserved for live queue
             if cell_value != "-":
-                all_dashes = False
-                break
-        if all_dashes:
-            return True
-    return False
+                return False
+    
+    return True
 
 def get_or_create_sheet(date_str):
     try:
