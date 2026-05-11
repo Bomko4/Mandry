@@ -625,7 +625,7 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
                 break
         
         if all_occupied:
-            await callback.message.edit_text("Бронювання далі недоступне, тільки жива черга")
+            await callback.message.edit_text("На жаль, бронювання вже недоступне — наразі працюємо лише в форматі живої черги.\nБудемо раді бачити вас на сплаві!🏄‍♂️")
         else:
             await callback.message.edit_text("На сьогодні вільні часові слоти вже завершилися. Оберіть іншу дату.")
         await state.clear()
