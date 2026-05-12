@@ -399,6 +399,16 @@ def get_or_create_sheet(date_str):
         
         return new_ws
 
+
+def is_weather_blocked_sheet(all_values) -> bool:
+    for row_idx in range(1, len(TIME_SLOTS) + 1):
+        current_row_data = all_values[row_idx] if row_idx < len(all_values) else []
+        for col_idx in range(1, len(COLUMNS) + 1):
+            cell_value = current_row_data[col_idx] if col_idx < len(current_row_data) else ""
+            if cell_value.strip() != "*":
+                return False
+    return True
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -554,7 +564,17 @@ async def process_reminder_no(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("date_"))
 async def process_date(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(date=callback.data.split("_")[1])
+    selected_date = callback.data.split("_", 1)[1]
+    ws = get_or_create_sheet(selected_date)
+    all_values = ws.get_all_values()
+
+    if is_weather_blocked_sheet(all_values):
+        await callback.message.edit_text("Прогнозується негода, тому ми зачинені на цю дату🏄‍♂️")
+        await state.clear()
+        await callback.answer()
+        return
+
+    await state.update_data(date=selected_date)
 
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="1 година", callback_data="dur_1"))
@@ -562,6 +582,7 @@ async def process_date(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text("Скільки часу хочете плавати?", reply_markup=builder.as_markup())
     await state.set_state(Booking.duration)
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("dur_"))
 async def process_duration(callback: types.CallbackQuery, state: FSMContext):
