@@ -442,7 +442,7 @@ async def start_booking_from_menu(message: types.Message, state: FSMContext):
         )
 
     # Add a single larger button to navigate to the next two weeks
-    builder.row(types.InlineKeyboardButton(text="➡️ Наступні 2 тижні", callback_data="dates_next"))
+    builder.row(types.InlineKeyboardButton(text="➡️", callback_data="dates_next"))
 
     await message.answer("Оберіть дату:", reply_markup=builder.as_markup())
     await state.set_state(Booking.date)
@@ -463,7 +463,7 @@ async def show_next_dates(callback: types.CallbackQuery):
         )
 
     # show a back button to return to the previous two weeks
-    builder.row(types.InlineKeyboardButton(text="⬅️ Повернутися", callback_data="dates_prev"))
+    builder.row(types.InlineKeyboardButton(text="⬅️", callback_data="dates_prev"))
 
     await callback.message.edit_text("Оберіть дату:", reply_markup=builder.as_markup())
     await callback.answer()
