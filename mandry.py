@@ -438,8 +438,62 @@ async def start_booking_from_menu(message: types.Message, state: FSMContext):
             types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
         )
 
+    # Add a small bottom-right arrow to navigate to the next two weeks
+    builder.row(
+        types.InlineKeyboardButton(text=" ", callback_data="noop"),
+        types.InlineKeyboardButton(text="➡️", callback_data="dates_next"),
+    )
+
     await message.answer("Оберіть дату:", reply_markup=builder.as_markup())
     await state.set_state(Booking.date)
+
+
+@dp.callback_query(F.data == "noop")
+async def noop_callback(callback: types.CallbackQuery):
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "dates_next")
+async def show_next_dates(callback: types.CallbackQuery):
+    now = get_current_time()
+    # show days 15..28 (offsets 14..27)
+    left_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(14, 21)]
+    right_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(21, 28)]
+
+    builder = InlineKeyboardBuilder()
+    for left_date, right_date in zip(left_column_dates, right_column_dates):
+        builder.row(
+            types.InlineKeyboardButton(text=left_date, callback_data=f"date_{left_date}"),
+            types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
+        )
+
+    # show a back arrow to return to the previous two weeks
+    builder.row(types.InlineKeyboardButton(text="⬅️", callback_data="dates_prev"))
+
+    await callback.message.edit_text("Оберіть дату:", reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "dates_prev")
+async def show_prev_dates(callback: types.CallbackQuery):
+    now = get_current_time()
+    left_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(7)]
+    right_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(7, 14)]
+
+    builder = InlineKeyboardBuilder()
+    for left_date, right_date in zip(left_column_dates, right_column_dates):
+        builder.row(
+            types.InlineKeyboardButton(text=left_date, callback_data=f"date_{left_date}"),
+            types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
+        )
+
+    builder.row(
+        types.InlineKeyboardButton(text=" ", callback_data="noop"),
+        types.InlineKeyboardButton(text="➡️", callback_data="dates_next"),
+    )
+
+    await callback.message.edit_text("Оберіть дату:", reply_markup=builder.as_markup())
+    await callback.answer()
 
 @dp.message(F.text == "🍽️ Меню")
 async def show_prices(message: types.Message):
