@@ -56,6 +56,9 @@ TIME_SLOTS = [
     "15:15-16:15", "16:30-17:30", "17:45-18:45", "19:00-20:00"
 ]
 
+MORNING_WINDOWS = ["05:30-06:30", "06:30-07:30", "07:30-08:30", "08:30-09:30"]
+MORNING_STARTS = [w.split("-")[0] for w in MORNING_WINDOWS]
+
 EQUIPMENT_OPTIONS = [
     ("Сап одномісний", "sup_single"),
     ("Сап двомісний", "sup_double"),
@@ -438,19 +441,11 @@ async def start_booking_from_menu(message: types.Message, state: FSMContext):
             types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
         )
 
-    # Add a small bottom-right arrow to navigate to the next two weeks
-    builder.row(
-        types.InlineKeyboardButton(text=" ", callback_data="noop"),
-        types.InlineKeyboardButton(text="➡️", callback_data="dates_next"),
-    )
+    # Add a single larger button to navigate to the next two weeks
+    builder.row(types.InlineKeyboardButton(text="➡️ Наступні 2 тижні", callback_data="dates_next"))
 
     await message.answer("Оберіть дату:", reply_markup=builder.as_markup())
     await state.set_state(Booking.date)
-
-
-@dp.callback_query(F.data == "noop")
-async def noop_callback(callback: types.CallbackQuery):
-    await callback.answer()
 
 
 @dp.callback_query(F.data == "dates_next")
@@ -467,8 +462,8 @@ async def show_next_dates(callback: types.CallbackQuery):
             types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
         )
 
-    # show a back arrow to return to the previous two weeks
-    builder.row(types.InlineKeyboardButton(text="⬅️", callback_data="dates_prev"))
+    # show a back button to return to the previous two weeks
+    builder.row(types.InlineKeyboardButton(text="⬅️ Повернутися", callback_data="dates_prev"))
 
     await callback.message.edit_text("Оберіть дату:", reply_markup=builder.as_markup())
     await callback.answer()
@@ -487,10 +482,7 @@ async def show_prev_dates(callback: types.CallbackQuery):
             types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
         )
 
-    builder.row(
-        types.InlineKeyboardButton(text=" ", callback_data="noop"),
-        types.InlineKeyboardButton(text="➡️", callback_data="dates_next"),
-    )
+    builder.row(types.InlineKeyboardButton(text="➡️", callback_data="dates_next"))
 
     await callback.message.edit_text("Оберіть дату:", reply_markup=builder.as_markup())
     await callback.answer()
@@ -633,6 +625,7 @@ async def process_date(callback: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="1 година", callback_data="dur_1"))
     builder.row(types.InlineKeyboardButton(text="2 години", callback_data="dur_2"))
+    builder.row(types.InlineKeyboardButton(text="Ранковий сплав", callback_data="morning"))
 
     await callback.message.edit_text("Скільки часу хочете плавати?", reply_markup=builder.as_markup())
     await state.set_state(Booking.duration)
@@ -650,11 +643,36 @@ async def process_duration(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Оберіть обладнання:", reply_markup=builder.as_markup())
     await state.set_state(Booking.equipment)
 
+
+@dp.callback_query(F.data == "morning")
+async def process_morning(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(morning=True)
+
+    builder = InlineKeyboardBuilder()
+    for label, code in EQUIPMENT_OPTIONS:
+        builder.row(types.InlineKeyboardButton(text=label, callback_data=f"eq_{code}"))
+
+    await callback.message.edit_text("Оберіть обладнання для ранкового сплаву:", reply_markup=builder.as_markup())
+    await state.set_state(Booking.equipment)
+    await callback.answer()
+
 @dp.callback_query(F.data.startswith("eq_"))
 async def process_equip(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(equipment=callback.data.split("_", 1)[1])
 
     data = await state.get_data()
+
+    # If this is a morning booking flow, present the fixed morning slots
+    if data.get('morning'):
+        builder = InlineKeyboardBuilder()
+        for i, window in enumerate(MORNING_WINDOWS):
+            builder.row(types.InlineKeyboardButton(text=window, callback_data=f"mor_tmidx_{i}"))
+
+        await callback.message.edit_text("Оберіть час ранкового сплаву:", reply_markup=builder.as_markup())
+        await state.set_state(Booking.time)
+        await callback.answer()
+        return
+
     duration = int(data.get('duration', 1))
     selected_date = data.get('date')
     current_time = get_current_time()
@@ -708,6 +726,15 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text("Оберіть час:", reply_markup=builder.as_markup())
     await state.set_state(Booking.time)
+
+
+@dp.callback_query(F.data.startswith("mor_tmidx_"))
+async def process_morning_time(callback: types.CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split("_")[2])
+    await state.update_data(morning_time_index=idx)
+    await callback.message.edit_text("Введіть ваше Прізвище та Ім'я:")
+    await state.set_state(Booking.name)
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("tmidx_"))
 async def process_time(callback: types.CallbackQuery, state: FSMContext):
@@ -775,14 +802,33 @@ async def process_phone(message: types.Message, state: FSMContext):
     booking_lines = [f"ID:{booking_code}", client_name, phone]
     if equipment_note:
         booking_lines.append(equipment_note)
-    booking_value = "\n".join(booking_lines)
 
-    start_cell = gspread.utils.rowcol_to_a1(data['time_row'], data['equip_col'])
-    end_cell = gspread.utils.rowcol_to_a1(data['time_row'] + duration - 1, data['equip_col'])
-    ws.update(f"{start_cell}:{end_cell}", [[booking_value] for _ in range(duration)])
+    # Morning booking: append to a separate bottom table instead of main grid
+    if data.get('morning'):
+        idx = int(data.get('morning_time_index', 0))
+        booking_window = MORNING_WINDOWS[idx]
+        actual_equipment = EQUIPMENT_LABELS.get(data.get('equipment'), data.get('equipment'))
 
-    start_slot_index = data['time_row'] - 2
-    booking_window = build_time_window(start_slot_index, duration)
+        # Append a single row with time, equipment, id, name and phone
+        append_row = [booking_window, actual_equipment, f"ID:{booking_code}", client_name, phone]
+        try:
+            ws.append_row(append_row)
+        except Exception:
+            # Fallback to writing to next available row
+            all_vals = ws.get_all_values()
+            next_row = len(all_vals) + 1
+            ws.update(f"A{next_row}:E{next_row}", [append_row])
+
+        duration = 1
+    else:
+        booking_value = "\n".join(booking_lines)
+
+        start_cell = gspread.utils.rowcol_to_a1(data['time_row'], data['equip_col'])
+        end_cell = gspread.utils.rowcol_to_a1(data['time_row'] + duration - 1, data['equip_col'])
+        ws.update(f"{start_cell}:{end_cell}", [[booking_value] for _ in range(duration)])
+
+        start_slot_index = data['time_row'] - 2
+        booking_window = build_time_window(start_slot_index, duration)
 
     schedule_booking_reminder(
         user_chat_id=user_chat_id,
