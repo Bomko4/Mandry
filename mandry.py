@@ -653,7 +653,7 @@ async def process_date(callback: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="1 година", callback_data="dur_1"))
     builder.row(types.InlineKeyboardButton(text="2 години", callback_data="dur_2"))
-    builder.row(types.InlineKeyboardButton(text="Ранковий сплав", callback_data="morning"))
+    #builder.row(types.InlineKeyboardButton(text="Ранковий сплав", callback_data="morning"))
 
     await callback.message.edit_text("Скільки часу хочете плавати?", reply_markup=builder.as_markup())
     await state.set_state(Booking.duration)
