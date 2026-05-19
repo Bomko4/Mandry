@@ -391,8 +391,6 @@ def are_all_non_dash_columns_occupied(all_values, row_idx: int, duration: int, t
 def get_or_create_sheet(date_str):
     try:
         ws = sh.worksheet(date_str)
-        # Ensure morning table exists on existing sheets
-        ensure_morning_table(ws)
         return ws
     except gspread.exceptions.WorksheetNotFound:
         new_ws = sh.add_worksheet(title=date_str, rows="100", cols="20")
@@ -402,8 +400,6 @@ def get_or_create_sheet(date_str):
         
         time_col = [[t] for t in TIME_SLOTS]
         new_ws.update('A2:A9', time_col)
-        # Create morning table underneath
-        ensure_morning_table(new_ws)
         return new_ws
 
 
@@ -653,7 +649,7 @@ async def process_date(callback: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="1 година", callback_data="dur_1"))
     builder.row(types.InlineKeyboardButton(text="2 години", callback_data="dur_2"))
-    #builder.row(types.InlineKeyboardButton(text="Ранковий сплав", callback_data="morning"))
+    builder.row(types.InlineKeyboardButton(text="Ранковий сплав", callback_data="morning"))
 
     await callback.message.edit_text("Скільки часу хочете плавати?", reply_markup=builder.as_markup())
     await state.set_state(Booking.duration)
@@ -674,6 +670,16 @@ async def process_duration(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "morning")
 async def process_morning(callback: types.CallbackQuery, state: FSMContext):
+    # Ensure morning table exists only when user explicitly requests it
+    data = await state.get_data()
+    selected_date = data.get('date')
+    if selected_date:
+        try:
+            ws = get_or_create_sheet(selected_date)
+            ensure_morning_table(ws)
+        except Exception:
+            pass
+
     await state.update_data(morning=True)
 
     builder = InlineKeyboardBuilder()
