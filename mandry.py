@@ -43,6 +43,7 @@ else:
 
 GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
 APP_TIMEZONE = ZoneInfo(os.getenv("BOT_TIMEZONE", "Europe/Kyiv"))
+    BLACKLIST_SHEET_NAME = os.getenv("BLACKLIST_SHEET_NAME", "Чорний Список")
 
 COLUMNS = [
     "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий",
@@ -105,6 +106,7 @@ class Booking(StatesGroup):
     duration = State()
     equipment = State()
     time = State()
+    quantity = State()
     name = State()
     phone = State()
     cancel_code = State()
@@ -241,6 +243,28 @@ def generate_booking_code() -> str:
     raise RuntimeError("Не вдалося згенерувати унікальний код бронювання")
 
 
+def normalize_phone_number(phone: str) -> str:
+    return "".join(ch for ch in phone if ch.isdigit())
+
+
+def is_phone_blacklisted(phone: str) -> bool:
+    normalized_phone = normalize_phone_number(phone)
+    if not normalized_phone:
+        return False
+
+    try:
+        blacklist_ws = sh.worksheet(BLACKLIST_SHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        return False
+
+    for row in blacklist_ws.get_all_values():
+        for cell in row:
+            if normalize_phone_number(cell) == normalized_phone:
+                return True
+
+    return False
+
+
 def find_and_clear_booking_by_code(code: str):
     marker = f"ID:{code}"
     cleared_cells = []
@@ -285,6 +309,26 @@ def find_free_column_for_duration(all_values, row_idx: int, duration: int, targe
     return None
 
 
+def find_free_columns_for_duration(all_values, row_idx: int, duration: int, target_cols: list[int], quantity: int) -> list[int]:
+    free_cols = []
+
+    for col in target_cols:
+        is_block_free = True
+        for offset in range(duration):
+            current_row_idx = row_idx + offset
+            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
+            if col < len(current_row_data) and current_row_data[col].strip():
+                is_block_free = False
+                break
+
+        if is_block_free:
+            free_cols.append(col + 1)
+            if len(free_cols) >= quantity:
+                return free_cols
+
+    return []
+
+
 def build_time_window(start_index: int, duration: int) -> str:
     start_time = TIME_SLOTS[start_index].split('-')[0]
     start_dt = datetime.strptime(start_time, "%H:%M")
@@ -306,6 +350,7 @@ def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int
     )
     if preferred_col:
         return {
+            "resolved_equipment": requested_equipment,
             "equip_col": preferred_col,
             "actual_equipment": EQUIPMENT_LABELS[requested_equipment],
             "note": "",
@@ -320,6 +365,7 @@ def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int
         )
         if fallback_col:
             return {
+                "resolved_equipment": "sup_double",
                 "equip_col": fallback_col,
                 "actual_equipment": "Сап двомісний",
                 "note": "(одна людина)",
@@ -766,8 +812,19 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
 async def process_morning_time(callback: types.CallbackQuery, state: FSMContext):
     idx = int(callback.data.split("_")[2])
     await state.update_data(morning_time_index=idx)
-    await callback.message.edit_text("Введіть ваше Прізвище та Ім'я:")
-    await state.set_state(Booking.name)
+    data = await state.get_data()
+
+    if data.get('equipment', '').startswith("sup_"):
+        builder = InlineKeyboardBuilder()
+        for value in range(1, 11):
+            builder.button(text=str(value), callback_data=f"qty_{value}")
+        builder.adjust(5, 5)
+
+        await callback.message.edit_text("Скільки сапів бронюєте?", reply_markup=builder.as_markup())
+        await state.set_state(Booking.quantity)
+    else:
+        await callback.message.edit_text("Введіть ваше Прізвище та Ім'я:")
+        await state.set_state(Booking.name)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("tmidx_"))
@@ -791,15 +848,75 @@ async def process_time(callback: types.CallbackQuery, state: FSMContext):
     if not booking_resolution:
         await callback.answer("❌ Немає вільних місць на обраний час!", show_alert=True)
     else:
+        requested_equipment = data['equipment']
         await state.update_data(
             time_row=row_idx,
             equip_col=booking_resolution["equip_col"],
             duration=duration,
             actual_equipment=booking_resolution["actual_equipment"],
             equipment_note=booking_resolution["note"],
+            resolved_equipment=booking_resolution.get("resolved_equipment", requested_equipment),
         )
-        await callback.message.edit_text("Введіть ваше Прізвище та Ім'я:")
-        await state.set_state(Booking.name)
+        if requested_equipment.startswith("sup_"):
+            builder = InlineKeyboardBuilder()
+            for value in range(1, 11):
+                builder.button(text=str(value), callback_data=f"qty_{value}")
+            builder.adjust(5, 5)
+
+            await callback.message.edit_text("Скільки сапів бронюєте?", reply_markup=builder.as_markup())
+            await state.set_state(Booking.quantity)
+        else:
+            await callback.message.edit_text("Введіть ваше Прізвище та Ім'я:")
+            await state.set_state(Booking.name)
+
+
+@dp.callback_query(F.data.startswith("qty_"))
+async def process_quantity(callback: types.CallbackQuery, state: FSMContext):
+    quantity = int(callback.data.split("_")[1])
+    if quantity < 1 or quantity > 10:
+        await callback.answer("❌ Оберіть кількість від 1 до 10", show_alert=True)
+        return
+
+    data = await state.get_data()
+    requested_equipment = data.get('resolved_equipment', data.get('equipment'))
+    if not requested_equipment or not requested_equipment.startswith("sup_"):
+        await callback.answer("❌ Цей крок доступний лише для сапів", show_alert=True)
+        return
+
+    ws = get_or_create_sheet(data['date'])
+    all_values = ws.get_all_values()
+    if data.get('morning'):
+        ensure_morning_table(ws)
+        all_values = ws.get_all_values()
+
+        header_row_idx = None
+        header_row = []
+        for r_idx, row in enumerate(all_values):
+            if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
+                header_row_idx = r_idx
+                header_row = row
+                break
+
+        if header_row_idx is None:
+            await callback.answer("❌ Не вдалося знайти ранкову таблицю", show_alert=True)
+            return
+
+        morning_index = int(data.get('morning_time_index', 0))
+        row_idx = header_row_idx + 1 + morning_index + 1
+    else:
+        row_idx = int(data.get('time_row', 0))
+
+    duration = int(data.get('duration', 1))
+    target_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS[requested_equipment])
+    free_cols = find_free_columns_for_duration(all_values, row_idx, duration, target_cols, quantity)
+
+    if len(free_cols) < quantity:
+        await callback.answer("❌ На цей час немає достатньої кількості вільних сапів", show_alert=True)
+        return
+
+    await state.update_data(quantity=quantity, equip_cols=free_cols)
+    await callback.message.edit_text("Введіть ваше Прізвище та Ім'я:")
+    await state.set_state(Booking.name)
 
 @dp.message(Booking.name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -832,8 +949,16 @@ async def process_phone(message: types.Message, state: FSMContext):
     actual_equipment = data.get('actual_equipment', data['equipment'])
     equipment_note = data.get('equipment_note', '')
     user_chat_id = message.chat.id
+    quantity = int(data.get('quantity', 1))
+
+    if is_phone_blacklisted(phone):
+        await message.answer("❌ Цей номер телефону є у чорному списку. Бронювання недоступне.")
+        await state.clear()
+        return
 
     booking_lines = [f"ID:{booking_code}", client_name, phone]
+    if quantity > 1:
+        booking_lines.append(f"Кількість сапів: {quantity}")
     if equipment_note:
         booking_lines.append(equipment_note)
 
@@ -867,52 +992,73 @@ async def process_phone(message: types.Message, state: FSMContext):
 
         morning_row_idx0 = header_row_idx + 1 + idx
 
-        # Find a target column among preferred names
-        preferred_names = EQUIPMENT_COLUMN_GROUPS.get(data.get('equipment'), [])
-        chosen_col_idx = None
-        for name in preferred_names:
-            if name in header_row:
-                col_idx = header_row.index(name)
-                # Check cell availability
-                cell_value = ""
-                if morning_row_idx0 < len(all_vals):
-                    row_vals = all_vals[morning_row_idx0]
-                    if col_idx < len(row_vals):
-                        cell_value = row_vals[col_idx].strip()
-                if not cell_value:
-                    chosen_col_idx = col_idx
-                    break
-
-        # If none free, pick first preferred column if exists
-        if chosen_col_idx is None and preferred_names:
-            for name in preferred_names:
-                if name in header_row:
-                    chosen_col_idx = header_row.index(name)
-                    break
-
-        if chosen_col_idx is None:
-            # fallback to second column
-            chosen_col_idx = 1
-
-        # Build booking value same as main grid (single cell multiline)
         booking_value = "\n".join([f"ID:{booking_code}", client_name, phone] + ([equipment_note] if equipment_note else []))
 
-        write_row = morning_row_idx0 + 1
-        write_col = chosen_col_idx + 1
-        start_cell = gspread.utils.rowcol_to_a1(write_row, write_col)
-        try:
-            ws.update(start_cell, [[booking_value]])
-        except Exception:
-            # fallback: append as row
-            ws.append_row([booking_window, actual_equipment, f"ID:{booking_code}", client_name, phone])
+        if quantity > 1:
+            equip_cols = data.get('equip_cols', [])
+            if len(equip_cols) < quantity:
+                await message.answer("❌ Не вдалося зафіксувати бронювання: недостатньо вільних сапів на цей час.")
+                await state.clear()
+                return
+
+            for col in equip_cols:
+                start_cell = gspread.utils.rowcol_to_a1(morning_row_idx0 + 1, col)
+                try:
+                    ws.update(start_cell, [[booking_value]])
+                except Exception:
+                    ws.append_row([booking_window, actual_equipment, f"ID:{booking_code}", client_name, phone])
+        else:
+            preferred_names = EQUIPMENT_COLUMN_GROUPS.get(data.get('equipment'), [])
+            chosen_col_idx = None
+            for name in preferred_names:
+                if name in header_row:
+                    col_idx = header_row.index(name)
+                    cell_value = ""
+                    if morning_row_idx0 < len(all_vals):
+                        row_vals = all_vals[morning_row_idx0]
+                        if col_idx < len(row_vals):
+                            cell_value = row_vals[col_idx].strip()
+                    if not cell_value:
+                        chosen_col_idx = col_idx
+                        break
+
+            if chosen_col_idx is None and preferred_names:
+                for name in preferred_names:
+                    if name in header_row:
+                        chosen_col_idx = header_row.index(name)
+                        break
+
+            if chosen_col_idx is None:
+                chosen_col_idx = 1
+
+            write_row = morning_row_idx0 + 1
+            write_col = chosen_col_idx + 1
+            start_cell = gspread.utils.rowcol_to_a1(write_row, write_col)
+            try:
+                ws.update(start_cell, [[booking_value]])
+            except Exception:
+                ws.append_row([booking_window, actual_equipment, f"ID:{booking_code}", client_name, phone])
 
         duration = 1
     else:
         booking_value = "\n".join(booking_lines)
 
-        start_cell = gspread.utils.rowcol_to_a1(data['time_row'], data['equip_col'])
-        end_cell = gspread.utils.rowcol_to_a1(data['time_row'] + duration - 1, data['equip_col'])
-        ws.update(f"{start_cell}:{end_cell}", [[booking_value] for _ in range(duration)])
+        if quantity > 1:
+            equip_cols = data.get('equip_cols', [])
+            if len(equip_cols) < quantity:
+                await message.answer("❌ Не вдалося зафіксувати бронювання: недостатньо вільних сапів на цей час.")
+                await state.clear()
+                return
+
+            for row_offset in range(duration):
+                row_idx = data['time_row'] + row_offset
+                for col in equip_cols:
+                    start_cell = gspread.utils.rowcol_to_a1(row_idx, col)
+                    ws.update(start_cell, [[booking_value]])
+        else:
+            start_cell = gspread.utils.rowcol_to_a1(data['time_row'], data['equip_col'])
+            end_cell = gspread.utils.rowcol_to_a1(data['time_row'] + duration - 1, data['equip_col'])
+            ws.update(f"{start_cell}:{end_cell}", [[booking_value] for _ in range(duration)])
 
         start_slot_index = data['time_row'] - 2
         booking_window = build_time_window(start_slot_index, duration)
@@ -932,6 +1078,7 @@ async def process_phone(message: types.Message, state: FSMContext):
         f"Дата: {data['date']}\n"
         f"Час: {booking_window}\n"
         f"Тривалість: {duration} год\n"
+        f"Кількість сапів: {quantity}\n"
         f"Обладнання: {actual_equipment} {equipment_note}".rstrip() + "\n"
         f"Клієнт: {client_name}\n"
         f"Телефон: {phone}"
@@ -955,6 +1102,7 @@ async def process_phone(message: types.Message, state: FSMContext):
         f"✅ Записано!\n"
         f"Номер бронювання: {booking_code}\n"
         f"Тривалість: {duration} год\n"
+        f"Кількість сапів: {quantity}\n"
         f"Час: {booking_window}\n"
         f"Обладнання: {actual_equipment} {equipment_note}".rstrip() + "\n"
         f"Чекаємо вас на воді!",
