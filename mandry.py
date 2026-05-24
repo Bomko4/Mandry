@@ -43,7 +43,7 @@ else:
 
 GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
 APP_TIMEZONE = ZoneInfo(os.getenv("BOT_TIMEZONE", "Europe/Kyiv"))
-    BLACKLIST_SHEET_NAME = os.getenv("BLACKLIST_SHEET_NAME", "Чорний Список")
+BLACKLIST_SHEET_NAME = os.getenv("BLACKLIST_SHEET_NAME", "Чорний Список")
 
 COLUMNS = [
     "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий", "Сап білий",
@@ -299,7 +299,7 @@ def find_free_column_for_duration(all_values, row_idx: int, duration: int, targe
         for offset in range(duration):
             current_row_idx = row_idx + offset
             current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
-            if col < len(current_row_data) and current_row_data[col].strip():
+            if col - 1 < len(current_row_data) and current_row_data[col - 1].strip():
                 is_block_free = False
                 break
 
@@ -317,7 +317,7 @@ def find_free_columns_for_duration(all_values, row_idx: int, duration: int, targ
         for offset in range(duration):
             current_row_idx = row_idx + offset
             current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
-            if col < len(current_row_data) and current_row_data[col].strip():
+            if col - 1 < len(current_row_data) and current_row_data[col - 1].strip():
                 is_block_free = False
                 break
 
