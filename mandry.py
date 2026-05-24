@@ -957,8 +957,6 @@ async def process_phone(message: types.Message, state: FSMContext):
         return
 
     booking_lines = [f"ID:{booking_code}", client_name, phone]
-    if quantity > 1:
-        booking_lines.append(f"Кількість сапів: {quantity}")
     if equipment_note:
         booking_lines.append(equipment_note)
 
