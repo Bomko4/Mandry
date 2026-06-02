@@ -342,31 +342,28 @@ def get_current_time() -> datetime:
 
 def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int, duration: int):
     preferred_names = EQUIPMENT_COLUMN_GROUPS[requested_equipment]
-    preferred_col = find_free_column_for_duration(
-        all_values,
-        row_idx,
-        duration,
-        get_target_columns_for_names(preferred_names),
-    )
-    if preferred_col:
+    preferred_target_cols = get_target_columns_for_names(preferred_names)
+
+    # Try to find at least one free column in preferred group
+    free_pref = find_free_columns_for_duration(all_values, row_idx, duration, preferred_target_cols, 1)
+    if free_pref:
+        col = free_pref[0]
         return {
             "resolved_equipment": requested_equipment,
-            "equip_col": preferred_col,
+            "equip_col": col,
             "actual_equipment": EQUIPMENT_LABELS[requested_equipment],
             "note": "",
         }
 
+    # If requesting single sup, allow fallback to double if no single available
     if requested_equipment == "sup_single":
-        fallback_col = find_free_column_for_duration(
-            all_values,
-            row_idx,
-            duration,
-            get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS["sup_double"]),
-        )
-        if fallback_col:
+        double_target_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS["sup_double"])
+        free_double = find_free_columns_for_duration(all_values, row_idx, duration, double_target_cols, 1)
+        if free_double:
+            col = free_double[0]
             return {
                 "resolved_equipment": "sup_double",
-                "equip_col": fallback_col,
+                "equip_col": col,
                 "actual_equipment": "Сап двомісний",
                 "note": "(одна людина)",
             }
@@ -378,7 +375,6 @@ def has_dash_reserved_slots(all_values, row_idx: int, duration: int, target_cols
     if not target_cols:
         return False
     
-    # Check that ALL cells in ALL target columns (for the duration) are "-"
     for col in target_cols:
         for offset in range(duration):
             current_row_idx = row_idx + offset
