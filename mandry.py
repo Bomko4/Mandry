@@ -290,7 +290,9 @@ def find_and_clear_booking_by_code(code: str):
 
 
 def get_target_columns_for_names(names: list[str]) -> list[int]:
-    return [index + 1 for index, name in enumerate(COLUMNS) if name in names]
+    # COLUMNS lists equipment starting from sheet column B (A is 'ВІКНО'),
+    # so add 2 to enumerate index to get 1-based sheet column numbers.
+    return [index + 2 for index, name in enumerate(COLUMNS) if name in names]
 
 
 def find_free_column_for_duration(all_values, row_idx: int, duration: int, target_cols: list[int]):
