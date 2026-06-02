@@ -304,7 +304,7 @@ def find_free_column_for_duration(all_values, row_idx: int, duration: int, targe
                 break
 
         if is_block_free:
-            return col + 1
+            return col
 
     return None
 
@@ -322,7 +322,7 @@ def find_free_columns_for_duration(all_values, row_idx: int, duration: int, targ
                 break
 
         if is_block_free:
-            free_cols.append(col + 1)
+            free_cols.append(col)
             if len(free_cols) >= quantity:
                 return free_cols
 
