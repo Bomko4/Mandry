@@ -768,7 +768,7 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
     
     builder = InlineKeyboardBuilder()
     max_start_index = len(TIME_SLOTS) - duration
-    available_slots = 0
+    visible_slots = 0
     
     preferred_names = EQUIPMENT_COLUMN_GROUPS[data['equipment']]
     target_cols = get_target_columns_for_names(preferred_names)
@@ -780,14 +780,21 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
             continue
 
         row_idx = start_index + 2
-        # Check if there's a free spot for this time slot
+        window_label = build_time_window(start_index, duration)
+
+        # If the whole slot is marked with '-', keep it visible but only for live queue.
+        if has_dash_reserved_slots(all_values, row_idx, duration, target_cols):
+            builder.row(types.InlineKeyboardButton(text=window_label, callback_data=f"tmidx_{start_index}"))
+            visible_slots += 1
+            continue
+
+        # Regular online booking availability.
         booking_resolution = resolve_equipment_booking(data['equipment'], all_values, row_idx, duration)
         if booking_resolution:
-            window_label = build_time_window(start_index, duration)
             builder.row(types.InlineKeyboardButton(text=window_label, callback_data=f"tmidx_{start_index}"))
-            available_slots += 1
+            visible_slots += 1
 
-    if available_slots == 0:
+    if visible_slots == 0:
         # Check if all non-dash columns are occupied
         all_occupied = False
         for start_index in range(max_start_index + 1):
@@ -845,6 +852,13 @@ async def process_time(callback: types.CallbackQuery, state: FSMContext):
     
     if row_idx + duration - 1 > len(TIME_SLOTS) + 1:
         await callback.answer("❌ Для цієї тривалості оберіть раніший старт!", show_alert=True)
+        return
+
+    preferred_names = EQUIPMENT_COLUMN_GROUPS[data['equipment']]
+    target_cols = get_target_columns_for_names(preferred_names)
+
+    if has_dash_reserved_slots(all_values, row_idx, duration, target_cols):
+        await callback.answer("⏳ На цей час доступна лише жива черга", show_alert=True)
         return
 
     booking_resolution = resolve_equipment_booking(data['equipment'], all_values, row_idx, duration)
