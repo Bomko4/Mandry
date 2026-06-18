@@ -721,6 +721,8 @@ async def process_cancel_booking(message: types.Message, state: FSMContext):
         await message.answer("Невірний формат. Введіть саме 5 цифр, наприклад: 04231")
         return
 
+    await message.answer("Відбувається процес скасування!\nДякуємо за очікування💙")
+
     cleared_count, booking_name = find_and_clear_booking_by_code(code)
     if cleared_count == 0:
         await message.answer("❌ Бронювання з таким номером не знайдено.")
@@ -1062,6 +1064,8 @@ async def process_phone(message: types.Message, state: FSMContext):
     else:
         await message.answer("Будь ласка, скористайтесь кнопкою нижче щоб поділитись номером.")
         return
+
+    await message.answer("Відбувається процес бронювання!\nДякуємо за очікування💙")
 
     data = await state.get_data()
     client_name = data.get('client_name', '')
