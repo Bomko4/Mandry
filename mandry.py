@@ -54,7 +54,7 @@ COLUMNS = [
 
 TIME_SLOTS = [
     "10:15-11:15", "11:30-12:30", "12:45-13:45", "14:00-15:00",
-    "15:15-16:15", "16:30-17:30", "17:45-18:45", "19:00-20:00"
+    "15:15-16:15", "16:30-17:30", "17:45-18:45", "19:00-20:00", "20:10-21:10"
 ]
 
 MORNING_WINDOWS = ["05:30-06:30", "06:30-07:30", "07:30-08:30", "08:30-09:30"]
@@ -411,8 +411,8 @@ def are_all_non_dash_columns_occupied(all_values, row_idx: int, duration: int, t
     non_dash_cols = get_non_dash_columns(all_values, row_idx, duration, target_cols)
     
     if not non_dash_cols:
-        # All columns are marked with "-", so they're reserved for live queue
-        return False
+        # All columns are marked with "-", so online booking is unavailable (live queue mode)
+        return True
     
     # Check if all non-dash columns are occupied
     for col in non_dash_cols:
@@ -435,6 +435,11 @@ def are_all_non_dash_columns_occupied(all_values, row_idx: int, duration: int, t
 def get_or_create_sheet(date_str):
     try:
         ws = sh.worksheet(date_str)
+        existing_values = ws.col_values(1)
+        for index, slot in enumerate(TIME_SLOTS, start=2):
+            current_value = existing_values[index - 1].strip() if len(existing_values) >= index else ""
+            if current_value != slot:
+                ws.update(gspread.utils.rowcol_to_a1(index, 1), [[slot]])
         return ws
     except gspread.exceptions.WorksheetNotFound:
         new_ws = sh.add_worksheet(title=date_str, rows="100", cols="20")
@@ -443,7 +448,8 @@ def get_or_create_sheet(date_str):
         new_ws.update('A1', [headers])
         
         time_col = [[t] for t in TIME_SLOTS]
-        new_ws.update('A2:A9', time_col)
+        end_row = 1 + len(TIME_SLOTS)
+        new_ws.update(f'A2:A{end_row}', time_col)
         return new_ws
 
 
