@@ -36,10 +36,12 @@ staff_chat_id_raw = os.getenv("STAFF_CHAT_ID")
 if staff_chat_id_raw:
     try:
         STAFF_CHAT_ID = int(staff_chat_id_raw)
+        print(f"[INFO] STAFF_CHAT_ID встановлено: {STAFF_CHAT_ID}")
     except ValueError as err:
         raise SystemExit("STAFF_CHAT_ID має бути числом, наприклад -1001234567890") from err
 else:
     STAFF_CHAT_ID = None
+    print("[WARNING] Змінна STAFF_CHAT_ID не задана. Повідомлення про бронювання не будуть надсилатися в чат персоналу.")
 
 GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
 APP_TIMEZONE = ZoneInfo(os.getenv("BOT_TIMEZONE", "Europe/Kyiv"))
@@ -643,9 +645,13 @@ async def process_cancel_booking(message: types.Message, state: FSMContext):
     )
     if STAFF_CHAT_ID is not None:
         try:
+            print(f"[INFO] Надсилаємо повідомлення про скасування в чат {STAFF_CHAT_ID}")
             await bot.send_message(chat_id=STAFF_CHAT_ID, text=cancel_notify)
-        except Exception:
-            pass
+            print(f"[INFO] Повідомлення про скасування успішно надіслано")
+        except Exception as e:
+            print(f"[ERROR] Помилка при надсиланні повідомлення про скасування: {e}")
+    else:
+        print("[WARNING] STAFF_CHAT_ID не задано")
 
     await message.answer(f"✅ Бронювання {code} скасовано.")
     await state.clear()
@@ -670,6 +676,7 @@ async def process_reminder_no(callback: types.CallbackQuery):
 
     if STAFF_CHAT_ID is not None:
         try:
+            print(f"[INFO] Надсилаємо повідомлення про скасування з нагадування в чат {STAFF_CHAT_ID}")
             await bot.send_message(
                 chat_id=STAFF_CHAT_ID,
                 text=(
@@ -678,8 +685,11 @@ async def process_reminder_no(callback: types.CallbackQuery):
                     "Клієнт натиснув: Ні, передумав"
                 ),
             )
-        except Exception:
-            pass
+            print(f"[INFO] Повідомлення про скасування з нагадування успішно надіслано")
+        except Exception as e:
+            print(f"[ERROR] Помилка при надсиланні повідомлення про скасування з нагадування: {e}")
+    else:
+        print("[WARNING] STAFF_CHAT_ID не задано")
 
     await callback.message.edit_text("✅ Бронювання скасовано. Якщо захочете, можете створити нове у головному меню.")
     await callback.answer()
@@ -1103,9 +1113,13 @@ async def process_phone(message: types.Message, state: FSMContext):
     )
     if STAFF_CHAT_ID is not None:
         try:
+            print(f"[INFO] Надсилаємо повідомлення в чат {STAFF_CHAT_ID}")
             await bot.send_message(chat_id=STAFF_CHAT_ID, text=notify_text)
-        except Exception:
-            pass
+            print(f"[INFO] Повідомлення успішно надіслано")
+        except Exception as e:
+            print(f"[ERROR] Помилка при надсиланні повідомлення в чат персоналу: {e}")
+    else:
+        print("[WARNING] STAFF_CHAT_ID не задано")
 
     reply_keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
