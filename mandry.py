@@ -237,10 +237,28 @@ def booking_code_exists(code: str) -> bool:
     return False
 
 
+def get_all_booking_codes_from_today() -> set:
+    """Fetch all existing booking codes in one pass instead of checking each one individually."""
+    codes = set()
+    for ws in get_booking_worksheets_from_today():
+        try:
+            values = ws.get_all_values()
+            for row in values:
+                for cell in row:
+                    if isinstance(cell, str) and cell.startswith("ID:"):
+                        code_part = cell.split("\n")[0][3:].strip()  # Extract code from ID:xxxxx
+                        if code_part.isdigit() and len(code_part) == 5:
+                            codes.add(code_part)
+        except Exception:
+            pass
+    return codes
+
+
 def generate_booking_code() -> str:
+    existing_codes = get_all_booking_codes_from_today()
     for _ in range(1000):
         code = f"{random.randint(0, 99999):05d}"
-        if not booking_code_exists(code):
+        if code not in existing_codes:
             return code
     raise RuntimeError("Не вдалося згенерувати унікальний код бронювання")
 
@@ -268,11 +286,16 @@ def is_phone_blacklisted(phone: str) -> bool:
 
 def find_and_clear_booking_by_code(code: str):
     marker = f"ID:{code}"
-    cleared_cells = []
+    updates_by_ws = {}  # Batch updates per worksheet to reduce API calls
     booking_name = ""
 
     for ws in get_booking_worksheets_from_today():
-        values = ws.get_all_values()
+        try:
+            values = ws.get_all_values()
+        except Exception:
+            continue
+        
+        updates_for_this_ws = []
         for r_idx, row in enumerate(values, start=1):
             for c_idx, cell in enumerate(row, start=1):
                 if marker in cell:
@@ -282,12 +305,24 @@ def find_and_clear_booking_by_code(code: str):
                             booking_name = lines[1].strip()
                         elif "|" in cell:
                             booking_name = cell.split("|", 1)[1].strip()
-                    cleared_cells.append((ws, r_idx, c_idx))
+                    updates_for_this_ws.append((r_idx, c_idx))
+        
+        if updates_for_this_ws:
+            updates_by_ws[ws] = updates_for_this_ws
 
-    for ws, r_idx, c_idx in cleared_cells:
-        ws.update(gspread.utils.rowcol_to_a1(r_idx, c_idx), [[""]])
+    # Apply all updates for each worksheet in one batch call
+    total_cleared = 0
+    for ws, cells_to_clear in updates_by_ws.items():
+        try:
+            # Batch updates in a single API call
+            update_batch = [gspread.utils.rowcol_to_a1(r, c) for r, c in cells_to_clear]
+            for cell_a1 in update_batch:
+                ws.update(cell_a1, [[""]])
+            total_cleared += len(update_batch)
+        except Exception:
+            pass
 
-    return len(cleared_cells), booking_name
+    return total_cleared, booking_name
 
 
 def get_target_columns_for_names(names: list[str]) -> list[int]:
@@ -1031,6 +1066,12 @@ async def process_phone(message: types.Message, state: FSMContext):
     data = await state.get_data()
     client_name = data.get('client_name', '')
 
+    # Check blacklist first before any sheet operations
+    if is_phone_blacklisted(phone):
+        await message.answer("❌ Цей номер телефону є у чорному списку. Бронювання недоступне.")
+        await state.clear()
+        return
+
     ws = get_or_create_sheet(data['date'])
     duration = int(data.get('duration', 1))
     booking_code = generate_booking_code()
@@ -1038,11 +1079,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     equipment_note = data.get('equipment_note', '')
     user_chat_id = message.chat.id
     quantity = int(data.get('quantity', 1))
-
-    if is_phone_blacklisted(phone):
-        await message.answer("❌ Цей номер телефону є у чорному списку. Бронювання недоступне.")
-        await state.clear()
-        return
 
     booking_lines = [f"ID:{booking_code}", client_name, phone]
     if equipment_note:
