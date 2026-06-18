@@ -237,10 +237,25 @@ def booking_code_exists(code: str) -> bool:
     return False
 
 
+def get_existing_booking_codes_from_today() -> set[str]:
+    codes = set()
+
+    for ws in get_booking_worksheets_from_today():
+        values = ws.get_all_values()
+        for row in values:
+            for cell in row:
+                if cell.startswith("ID:"):
+                    codes.add(cell[3:].strip())
+
+    return codes
+
+
 def generate_booking_code() -> str:
+    existing_codes = get_existing_booking_codes_from_today()
+
     for _ in range(1000):
         code = f"{random.randint(0, 99999):05d}"
-        if not booking_code_exists(code):
+        if code not in existing_codes:
             return code
     raise RuntimeError("Не вдалося згенерувати унікальний код бронювання")
 
@@ -487,12 +502,9 @@ def is_live_queue_only_slot(all_values, row_idx: int, duration: int, target_cols
     """
     if not target_cols:
         return False
-
     non_dash_cols = get_non_dash_columns(all_values, row_idx, duration, target_cols)
-    has_dash_columns = len(non_dash_cols) < len(target_cols)
-    if not has_dash_columns:
-        return False
 
+    has_dash_columns = len(non_dash_cols) < len(target_cols)
     return are_all_non_dash_columns_occupied(all_values, row_idx, duration, target_cols)
 
 def get_or_create_sheet(date_str):
@@ -1033,6 +1045,12 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     data = await state.get_data()
     client_name = data.get('client_name', '')
+
+    if is_phone_blacklisted(phone):
+        await message.answer("❌ Цей номер телефону є у чорному списку. Бронювання недоступне.")
+        await state.clear()
+        return
+
     ws = get_or_create_sheet(data['date'])
     duration = int(data.get('duration', 1))
     booking_code = generate_booking_code()
@@ -1040,11 +1058,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     equipment_note = data.get('equipment_note', '')
     user_chat_id = message.chat.id
     quantity = int(data.get('quantity', 1))
-
-    if is_phone_blacklisted(phone):
-        await message.answer("❌ Цей номер телефону є у чорному списку. Бронювання недоступне.")
-        await state.clear()
-        return
 
     booking_lines = [f"ID:{booking_code}", client_name, phone]
     if equipment_note:
