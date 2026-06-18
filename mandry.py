@@ -372,22 +372,6 @@ def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int
 
     return None
 
-def has_dash_reserved_slots(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
-    """Check if all target columns are marked with '-' (reserved for live queue)"""
-    if not target_cols:
-        return False
-    
-    for col in target_cols:
-        for offset in range(duration):
-            current_row_idx = row_idx + offset
-            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
-            cell_value = current_row_data[col - 1].strip() if col - 1 < len(current_row_data) else ""
-            # If any cell is not "-", then it's not all reserved for live queue
-            if cell_value != "-":
-                return False
-    
-    return True
-
 def get_non_dash_columns(all_values, row_idx: int, duration: int, target_cols: list[int]) -> list[int]:
     """Get columns that are NOT marked with '-'"""
     non_dash_cols = []
@@ -431,6 +415,24 @@ def are_all_non_dash_columns_occupied(all_values, row_idx: int, duration: int, t
     
     # All non-dash columns are fully occupied
     return True
+
+
+def is_live_queue_only_slot(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
+    """Return True when slot should be visible but only available via live queue.
+
+    Covers two cases:
+    1) all target columns are marked with '-'
+    2) mixed booked + '-' where all non-dash columns are occupied
+    """
+    if not target_cols:
+        return False
+
+    non_dash_cols = get_non_dash_columns(all_values, row_idx, duration, target_cols)
+    has_dash_columns = len(non_dash_cols) < len(target_cols)
+    if not has_dash_columns:
+        return False
+
+    return are_all_non_dash_columns_occupied(all_values, row_idx, duration, target_cols)
 
 def get_or_create_sheet(date_str):
     try:
@@ -782,8 +784,8 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
         row_idx = start_index + 2
         window_label = build_time_window(start_index, duration)
 
-        # If the whole slot is marked with '-', keep it visible but only for live queue.
-        if has_dash_reserved_slots(all_values, row_idx, duration, target_cols):
+        # Show live-queue slots in picker (including mixed booked + '-').
+        if is_live_queue_only_slot(all_values, row_idx, duration, target_cols):
             builder.row(types.InlineKeyboardButton(text=window_label, callback_data=f"tmidx_{start_index}"))
             visible_slots += 1
             continue
@@ -857,7 +859,7 @@ async def process_time(callback: types.CallbackQuery, state: FSMContext):
     preferred_names = EQUIPMENT_COLUMN_GROUPS[data['equipment']]
     target_cols = get_target_columns_for_names(preferred_names)
 
-    if has_dash_reserved_slots(all_values, row_idx, duration, target_cols):
+    if is_live_queue_only_slot(all_values, row_idx, duration, target_cols):
         await callback.answer("⏳ На цей час доступна лише жива черга", show_alert=True)
         return
 
