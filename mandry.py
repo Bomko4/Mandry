@@ -228,7 +228,7 @@ def schedule_booking_reminder(
 
 def booking_code_exists(code: str) -> bool:
     marker = f"ID:{code}"
-    for ws in sh.worksheets():
+    for ws in get_booking_worksheets_from_today():
         values = ws.get_all_values()
         for row in values:
             for cell in row:
@@ -254,9 +254,8 @@ def is_phone_blacklisted(phone: str) -> bool:
     if not normalized_phone:
         return False
 
-    try:
-        blacklist_ws = sh.worksheet(BLACKLIST_SHEET_NAME)
-    except gspread.exceptions.WorksheetNotFound:
+    blacklist_ws = get_first_worksheet()
+    if blacklist_ws is None:
         return False
 
     for row in blacklist_ws.get_all_values():
@@ -272,7 +271,7 @@ def find_and_clear_booking_by_code(code: str):
     cleared_cells = []
     booking_name = ""
 
-    for ws in sh.worksheets():
+    for ws in get_booking_worksheets_from_today():
         values = ws.get_all_values()
         for r_idx, row in enumerate(values, start=1):
             for c_idx, cell in enumerate(row, start=1):
@@ -342,6 +341,66 @@ def build_time_window(start_index: int, duration: int) -> str:
 
 def get_current_time() -> datetime:
     return datetime.now(APP_TIMEZONE)
+
+
+def get_first_worksheet():
+    try:
+        return sh.get_worksheet(0)
+    except (IndexError, gspread.exceptions.WorksheetNotFound):
+        return None
+
+
+def get_booking_worksheets_from_today() -> list:
+    now = get_current_time()
+    today = now.date()
+    relevant_sheets = []
+
+    for ws in sh.worksheets():
+        try:
+            sheet_day = datetime.strptime(ws.title, "%d.%m").replace(year=now.year)
+        except ValueError:
+            continue
+
+        if sheet_day.date() < today and (today - sheet_day.date()).days > 1:
+            sheet_day = sheet_day.replace(year=now.year + 1)
+
+        if sheet_day.date() >= today:
+            relevant_sheets.append((sheet_day, ws))
+
+    relevant_sheets.sort(key=lambda item: item[0])
+    return [ws for _, ws in relevant_sheets]
+
+
+def _worksheet_date_key(ws):
+    try:
+        return datetime.strptime(ws.title, "%d.%m")
+    except ValueError:
+        return None
+
+
+def reorder_booking_worksheets():
+    first_ws = get_first_worksheet()
+    if first_ws is None:
+        return
+
+    dated_worksheets = []
+    other_worksheets = []
+
+    for ws in sh.worksheets():
+        if ws.id == first_ws.id:
+            continue
+
+        date_key = _worksheet_date_key(ws)
+        if date_key is None:
+            other_worksheets.append(ws)
+        else:
+            dated_worksheets.append((date_key, ws))
+
+    ordered_worksheets = [first_ws]
+    ordered_worksheets.extend(ws for _, ws in sorted(dated_worksheets, key=lambda item: item[0]))
+    ordered_worksheets.extend(other_worksheets)
+
+    sh.reorder_worksheets(ordered_worksheets)
 
 
 def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int, duration: int):
@@ -454,6 +513,7 @@ def get_or_create_sheet(date_str):
         time_col = [[t] for t in TIME_SLOTS]
         end_row = 1 + len(TIME_SLOTS)
         new_ws.update(f'A2:A{end_row}', time_col)
+        reorder_booking_worksheets()
         return new_ws
 
 
