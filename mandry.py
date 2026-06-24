@@ -1307,11 +1307,8 @@ async def process_phone(message: types.Message, state: FSMContext):
             write_row = morning_row_idx0 + 1
             write_col = chosen_col_idx + 1
             start_cell = gspread.utils.rowcol_to_a1(write_row, write_col)
-            try:
-                ws.update(start_cell, [[booking_value]])
-            except Exception:
-                ws.append_row([booking_window, actual_equipment, f"ID:{booking_code}", client_name, phone])
-
+            ws.update(start_cell, [[booking_value]])
+            
         duration = 1
     else:
         booking_value = "\n".join(booking_lines)
