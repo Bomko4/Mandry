@@ -1231,11 +1231,13 @@ async def process_phone(message: types.Message, state: FSMContext):
     user_chat_id = message.chat.id
     quantity = int(data.get('quantity', 1))
 
+    # Формуємо текст броні з усіма технічними даними ОДИН РАЗ
     booking_lines = [f"ID:{booking_code}", client_name, phone, f"CHAT:{user_chat_id}", f"QTY:{quantity}"]
     if equipment_note:
         booking_lines.append(equipment_note)
+    booking_value = "\n".join(booking_lines)
 
-    # Morning booking: write into the dedicated morning table block (single cell like main grid)
+    # --- ЛОГІКА РАНКОВОГО СПЛАВУ ---
     if data.get('morning'):
         idx = int(data.get('morning_time_index', 0))
         booking_window = MORNING_WINDOWS[idx]
@@ -1250,66 +1252,37 @@ async def process_phone(message: types.Message, state: FSMContext):
         for r_idx, row in enumerate(all_vals):
             if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
                 header_row_idx = r_idx
-                header_row = row
                 break
 
         if header_row_idx is None:
-            # fallback: append the morning block and reload
-            ensure_morning_table(ws)
-            all_vals = ws.get_all_values()
-            for r_idx, row in enumerate(all_vals):
-                if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
-                    header_row_idx = r_idx
-                    header_row = row
-                    break
+            await message.answer("❌ Сталася помилка структури таблиці. Спробуйте ще раз або зверніться до адміністратора.")
+            await state.clear()
+            return
 
-        morning_row_idx0 = header_row_idx + 1 + idx
+        # Точний рядок для запису (1-based index)
+        write_row = header_row_idx + 1 + idx + 1
 
-        booking_value = "\n".join([f"ID:{booking_code}", client_name, phone, f"CHAT:{user_chat_id}", f"QTY:{quantity}"] + ([equipment_note] if equipment_note else []))
+        # Визначаємо цільові колонки для обраного обладнання
+        requested_equipment = data.get('equipment')
+        target_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS[requested_equipment])
+        
+        # Шукаємо вільні колонки універсальною функцією
+        free_cols = find_free_columns_for_duration(all_vals, write_row, 1, target_cols, quantity)
 
-        if quantity > 1:
-            equip_cols = data.get('equip_cols', [])
-            if len(equip_cols) < quantity:
-                await message.answer("❌ Не вдалося зафіксувати бронювання: недостатньо вільних сапів на цей час.")
-                await state.clear()
-                return
+        if len(free_cols) < quantity:
+            await message.answer("❌ Не вдалося зафіксувати бронювання: недостатньо вільних сапів на цей час.")
+            await state.clear()
+            return
 
-            for col in equip_cols:
-                start_cell = gspread.utils.rowcol_to_a1(morning_row_idx0 + 1, col)
-                ws.update(start_cell, [[booking_value]])
-        else:
-            preferred_names = EQUIPMENT_COLUMN_GROUPS.get(data.get('equipment'), [])
-            chosen_col_idx = None
-            for name in preferred_names:
-                if name in header_row:
-                    col_idx = header_row.index(name)
-                    cell_value = ""
-                    if morning_row_idx0 < len(all_vals):
-                        row_vals = all_vals[morning_row_idx0]
-                        if col_idx < len(row_vals):
-                            cell_value = row_vals[col_idx].strip()
-                    if not cell_value:
-                        chosen_col_idx = col_idx
-                        break
-
-            if chosen_col_idx is None and preferred_names:
-                for name in preferred_names:
-                    if name in header_row:
-                        chosen_col_idx = header_row.index(name)
-                        break
-
-            if chosen_col_idx is None:
-                chosen_col_idx = 1
-
-            write_row = morning_row_idx0 + 1
-            write_col = chosen_col_idx + 1
-            start_cell = gspread.utils.rowcol_to_a1(write_row, write_col)
+        # Записуємо в усі знайдені вільні клітинки
+        for col in free_cols:
+            start_cell = gspread.utils.rowcol_to_a1(write_row, col)
             ws.update(start_cell, [[booking_value]])
             
         duration = 1
-    else:
-        booking_value = "\n".join(booking_lines)
 
+    # --- ЛОГІКА ЗВИЧАЙНОГО СПЛАВУ ---
+    else:
         if quantity > 1:
             equip_cols = data.get('equip_cols', [])
             if len(equip_cols) < quantity:
