@@ -1377,18 +1377,32 @@ async def process_phone(message: types.Message, state: FSMContext):
         ],
         resize_keyboard=True
     )
-    await message.answer(
-        f"✅ Бронювання прийнято!\n"
-        f"Дата: {data['date']}\n"
-        f"Ім'я клієнта: {client_name}\n"
-        f"Номер бронювання: {booking_code}\n"
-        f"Тривалість: {duration} год\n"
-        f"Кількість сапів: {quantity}\n"
-        f"Час: {booking_window}\n"
-        f"Обладнання: {actual_equipment} {equipment_note}".rstrip() + "\n"
-        f"Наш менеджер зв'яжеться з вами для оплати та підтвердження бронювання.",
-        reply_markup=reply_keyboard
-    )
+    if data.get('morning'):
+        await message.answer(
+            f"✅ Бронювання прийнято!\n"
+            f"Дата: {data['date']}\n"
+            f"Ім'я клієнта: {client_name}\n"
+            f"Номер бронювання: {booking_code}\n"
+            f"Тривалість: {duration} год\n"
+            f"Кількість сапів: {quantity}\n"
+            f"Час: {booking_window}\n"
+            f"Обладнання: {actual_equipment} {equipment_note}".rstrip() + "\n"
+            f"Наш менеджер зв'яжеться з вами для оплати та підтвердження бронювання.",
+            reply_markup=reply_keyboard
+        )
+    else:
+        await message.answer(
+            f"✅ Записано!\n"
+            f"Дата: {data['date']}\n"
+            f"Ім'я клієнта: {client_name}\n"
+            f"Номер бронювання: {booking_code}\n"
+            f"Тривалість: {duration} год\n"
+            f"Кількість сапів: {quantity}\n"
+            f"Час: {booking_window}\n"
+            f"Обладнання: {actual_equipment} {equipment_note}".rstrip() + "\n"
+            f"Чекаємо вас на воді!",
+            reply_markup=reply_keyboard
+        )
     await state.clear()
 
 async def main():
