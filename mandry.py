@@ -681,12 +681,10 @@ def get_or_create_sheet(date_str):
         return new_ws
 
 
-def ensure_morning_table(ws):
-    """Ensure the worksheet has a morning table block with a header 'Ранковий сплав' and morning rows."""
-    try:
-        all_vals = ws.get_all_values()
-    except Exception:
-        all_vals = []
+def ensure_morning_table(ws) -> list:
+    """Перевіряє наявність ранкової таблиці та повертає всі значення аркуша."""
+    # Дозволяємо впасти з помилкою, якщо API перевантажене, щоб не плодити дублікати таблиць
+    all_vals = ws.get_all_values()
 
     header_row_idx = None
     for r_idx, row in enumerate(all_vals):
@@ -695,22 +693,29 @@ def ensure_morning_table(ws):
             break
 
     if header_row_idx is not None:
+        needs_update = False
         for offset, window in enumerate(MORNING_WINDOWS, start=1):
             target_row_idx = header_row_idx + offset + 1
             if target_row_idx <= len(all_vals):
                 current_value = all_vals[target_row_idx - 1][0].strip() if all_vals[target_row_idx - 1] else ""
                 if current_value != window:
                     ws.update(gspread.utils.rowcol_to_a1(target_row_idx, 1), [[window]])
+                    needs_update = True
             else:
                 ws.append_row([window] + ["" for _ in COLUMNS])
-        return
+                needs_update = True
+        
+        if needs_update:
+            return ws.get_all_values()
+        return all_vals
 
-    # Append header and morning rows at the bottom
-    header = ["Ранковий сплав"] + COLUMNS
-    ws.append_row(header)
+    # Якщо таблиці немає, додаємо її ОДНИМ батч-запитом (економія API)
+    rows_to_append = [["Ранковий сплав"] + COLUMNS]
     for w in MORNING_WINDOWS:
-        row = [w] + ["" for _ in COLUMNS]
-        ws.append_row(row)
+        rows_to_append.append([w] + ["" for _ in COLUMNS])
+        
+    ws.append_rows(rows_to_append)
+    return ws.get_all_values()
 
 
 def is_weather_blocked_sheet(all_values) -> bool:
@@ -1158,8 +1163,7 @@ async def process_quantity(callback: types.CallbackQuery, state: FSMContext):
     ws = get_or_create_sheet(data['date'])
     all_values = ws.get_all_values()
     if data.get('morning'):
-        ensure_morning_table(ws)
-        all_values = ws.get_all_values()
+        all_vals = ensure_morning_table(ws)
 
         header_row_idx = None
         header_row = []
@@ -1244,8 +1248,7 @@ async def process_phone(message: types.Message, state: FSMContext):
         actual_equipment = EQUIPMENT_LABELS.get(data.get('equipment'), data.get('equipment'))
 
         # Ensure morning table exists and fetch values
-        ensure_morning_table(ws)
-        all_vals = ws.get_all_values()
+        all_vals = ensure_morning_table(ws)
 
         # Find morning header row
         header_row_idx = None
