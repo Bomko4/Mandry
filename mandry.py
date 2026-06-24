@@ -1276,10 +1276,7 @@ async def process_phone(message: types.Message, state: FSMContext):
 
             for col in equip_cols:
                 start_cell = gspread.utils.rowcol_to_a1(morning_row_idx0 + 1, col)
-                try:
-                    ws.update(start_cell, [[booking_value]])
-                except Exception:
-                    ws.append_row([booking_window, actual_equipment, f"ID:{booking_code}", client_name, phone])
+                ws.update(start_cell, [[booking_value]])
         else:
             preferred_names = EQUIPMENT_COLUMN_GROUPS.get(data.get('equipment'), [])
             chosen_col_idx = None
