@@ -389,7 +389,8 @@ def parse_sheet_date(date_str: str) -> datetime:
 
 def get_morning_booking_deadline(date_str: str) -> datetime:
     booking_day = parse_sheet_date(date_str)
-    return booking_day - timedelta(days=1, hours=1)
+    pre_day = booking_day - timedelta(days=1)
+    return pre_day.replace(hour=19, minute=0, second=0, microsecond=0)
 
 
 def cancel_morning_finalization_task(date_str: str):
