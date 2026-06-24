@@ -669,7 +669,7 @@ def get_or_create_sheet(date_str):
                 ws.update(gspread.utils.rowcol_to_a1(index, 1), [[slot]])
         return ws
     except gspread.exceptions.WorksheetNotFound:
-        new_ws = sh.add_worksheet(title=date_str, rows="100", cols="20")
+        new_ws = sh.add_worksheet(title=date_str, rows="100", cols="30")
         
         headers = ["ВІКНО"] + COLUMNS
         new_ws.update('A1', [headers])
