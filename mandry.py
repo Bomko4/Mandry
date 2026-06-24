@@ -59,7 +59,7 @@ TIME_SLOTS = [
     "15:15-16:15", "16:30-17:30", "17:45-18:45", "19:00-20:00", "20:10-21:10"
 ]
 
-MORNING_WINDOWS = ["05:30-06:30", "06:30-07:30", "07:30-08:30", "08:30-09:30"]
+MORNING_WINDOWS = ["06:00-07:00", "07:00-08:00", "08:00-09:00", "09:00-10:00"]
 MORNING_STARTS = [w.split("-")[0] for w in MORNING_WINDOWS]
 
 EQUIPMENT_OPTIONS = [
@@ -102,6 +102,7 @@ dp = Dispatcher()
 
 # Активні таски нагадувань за кодом бронювання.
 reminder_tasks: dict[str, asyncio.Task] = {}
+morning_finalization_tasks: dict[str, asyncio.Task] = {}
 
 class Booking(StatesGroup):
     date = State()
@@ -378,6 +379,136 @@ def get_current_time() -> datetime:
     return datetime.now(APP_TIMEZONE)
 
 
+def parse_sheet_date(date_str: str) -> datetime:
+    now = get_current_time()
+    booking_day = datetime.strptime(date_str, "%d.%m").replace(year=now.year, tzinfo=APP_TIMEZONE)
+    if booking_day < now - timedelta(days=1):
+        booking_day = booking_day.replace(year=now.year + 1)
+    return booking_day
+
+
+def get_morning_booking_deadline(date_str: str) -> datetime:
+    booking_day = parse_sheet_date(date_str)
+    return booking_day - timedelta(days=1, hours=1)
+
+
+def cancel_morning_finalization_task(date_str: str):
+    task = morning_finalization_tasks.pop(date_str, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def extract_booking_metadata(cell_value: str) -> dict[str, str]:
+    metadata = {}
+    for line in cell_value.splitlines():
+        line = line.strip()
+        if line.startswith("ID:"):
+            metadata["code"] = line.split(":", 1)[1].strip()
+        elif line.startswith("CHAT:"):
+            metadata["chat_id"] = line.split(":", 1)[1].strip()
+        elif line.startswith("QTY:"):
+            metadata["quantity"] = line.split(":", 1)[1].strip()
+    return metadata
+
+
+def get_morning_booking_records(ws) -> dict[str, dict[str, str]]:
+    try:
+        all_values = ws.get_all_values()
+    except Exception:
+        return {}
+
+    header_row_idx = None
+    for r_idx, row in enumerate(all_values):
+        if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
+            header_row_idx = r_idx
+            break
+
+    if header_row_idx is None:
+        return {}
+
+    records: dict[str, dict[str, str]] = {}
+    for offset in range(len(MORNING_WINDOWS)):
+        row_idx = header_row_idx + 1 + offset
+        if row_idx >= len(all_values):
+            continue
+
+        row = all_values[row_idx]
+        for cell in row[1:]:
+            if not cell:
+                continue
+            metadata = extract_booking_metadata(cell)
+            booking_code = metadata.get("code")
+            if booking_code and booking_code not in records:
+                records[booking_code] = metadata
+
+    return records
+
+
+async def finalize_morning_booking_if_needed(date_str: str):
+    ws = get_or_create_sheet(date_str)
+    ensure_morning_table(ws)
+
+    records = get_morning_booking_records(ws)
+    total_people = 0
+    unique_chat_ids: set[int] = set()
+
+    for metadata in records.values():
+        quantity_raw = metadata.get("quantity", "1")
+        try:
+            total_people += max(1, int(quantity_raw))
+        except ValueError:
+            total_people += 1
+
+        chat_id_raw = metadata.get("chat_id")
+        if chat_id_raw and chat_id_raw.lstrip("-").isdigit():
+            unique_chat_ids.add(int(chat_id_raw))
+
+    if total_people >= 6:
+        return
+
+    if not records:
+        return
+
+    for booking_code in list(records.keys()):
+        cancel_reminder_task(booking_code)
+        find_and_clear_booking_by_code(booking_code)
+
+    cancel_message = (
+        f"❌ Ранковий сплав на {date_str} не відбудеться, бо до 19:00 не назбиралося 6 людей.\n"
+        "Ми зв'яжемося з вами, якщо потрібно буде оформити нове бронювання."
+    )
+
+    for chat_id in unique_chat_ids:
+        try:
+            await bot.send_message(chat_id=chat_id, text=cancel_message)
+        except Exception:
+            pass
+
+
+def schedule_morning_finalization(date_str: str):
+    deadline = get_morning_booking_deadline(date_str)
+    now = get_current_time()
+    if now >= deadline:
+        return
+
+    existing_task = morning_finalization_tasks.get(date_str)
+    if existing_task and not existing_task.done():
+        return
+
+    async def worker():
+        try:
+            delay_seconds = (deadline - get_current_time()).total_seconds()
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+            await finalize_morning_booking_if_needed(date_str)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            morning_finalization_tasks.pop(date_str, None)
+
+    morning_finalization_tasks[date_str] = asyncio.create_task(worker())
+
+
 def get_first_worksheet():
     try:
         return sh.get_worksheet(0)
@@ -563,6 +694,14 @@ def ensure_morning_table(ws):
             break
 
     if header_row_idx is not None:
+        for offset, window in enumerate(MORNING_WINDOWS, start=1):
+            target_row_idx = header_row_idx + offset + 1
+            if target_row_idx <= len(all_vals):
+                current_value = all_vals[target_row_idx - 1][0].strip() if all_vals[target_row_idx - 1] else ""
+                if current_value != window:
+                    ws.update(gspread.utils.rowcol_to_a1(target_row_idx, 1), [[window]])
+            else:
+                ws.append_row([window] + ["" for _ in COLUMNS])
         return
 
     # Append header and morning rows at the bottom
@@ -805,7 +944,7 @@ async def process_date(callback: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="1 година", callback_data="dur_1"))
     builder.row(types.InlineKeyboardButton(text="2 години", callback_data="dur_2"))
-    #builder.row(types.InlineKeyboardButton(text="Ранковий сплав", callback_data="morning"))
+    builder.row(types.InlineKeyboardButton(text="Ранковий сплав", callback_data="morning"))
 
     await callback.message.edit_text("Скільки часу хочете плавати?", reply_markup=builder.as_markup())
     await state.set_state(Booking.duration)
@@ -826,9 +965,17 @@ async def process_duration(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "morning")
 async def process_morning(callback: types.CallbackQuery, state: FSMContext):
-    # Ensure morning table exists only when user explicitly requests it
     data = await state.get_data()
     selected_date = data.get('date')
+    if selected_date and get_current_time() >= get_morning_booking_deadline(selected_date):
+        await callback.message.edit_text(
+            "Ранковий сплав на цю дату вже недоступний. Бронювання закривається о 19:00 напередодні."
+        )
+        await state.clear()
+        await callback.answer()
+        return
+
+    # Ensure morning table exists only when user explicitly requests it
     if selected_date:
         try:
             ws = get_or_create_sheet(selected_date)
@@ -1083,7 +1230,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     user_chat_id = message.chat.id
     quantity = int(data.get('quantity', 1))
 
-    booking_lines = [f"ID:{booking_code}", client_name, phone]
+    booking_lines = [f"ID:{booking_code}", client_name, phone, f"CHAT:{user_chat_id}", f"QTY:{quantity}"]
     if equipment_note:
         booking_lines.append(equipment_note)
 
@@ -1117,7 +1264,7 @@ async def process_phone(message: types.Message, state: FSMContext):
 
         morning_row_idx0 = header_row_idx + 1 + idx
 
-        booking_value = "\n".join([f"ID:{booking_code}", client_name, phone] + ([equipment_note] if equipment_note else []))
+        booking_value = "\n".join([f"ID:{booking_code}", client_name, phone, f"CHAT:{user_chat_id}", f"QTY:{quantity}"] + ([equipment_note] if equipment_note else []))
 
         if quantity > 1:
             equip_cols = data.get('equip_cols', [])
@@ -1197,6 +1344,9 @@ async def process_phone(message: types.Message, state: FSMContext):
         equipment_note=equipment_note,
     )
 
+    if data.get('morning'):
+        schedule_morning_finalization(data['date'])
+
     notify_text = (
         "Нове бронювання!\n"
         f"Код: {booking_code}\n"
@@ -1228,13 +1378,15 @@ async def process_phone(message: types.Message, state: FSMContext):
         resize_keyboard=True
     )
     await message.answer(
-        f"✅ Записано!\n"
+        f"✅ Бронювання прийнято!\n"
+        f"Дата: {data['date']}\n"
+        f"Ім'я клієнта: {client_name}\n"
         f"Номер бронювання: {booking_code}\n"
         f"Тривалість: {duration} год\n"
         f"Кількість сапів: {quantity}\n"
         f"Час: {booking_window}\n"
         f"Обладнання: {actual_equipment} {equipment_note}".rstrip() + "\n"
-        f"Чекаємо вас на воді!",
+        f"Наш менеджер зв'яжеться з вами для оплати та підтвердження бронювання.",
         reply_markup=reply_keyboard
     )
     await state.clear()
