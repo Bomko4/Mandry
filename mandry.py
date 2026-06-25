@@ -681,6 +681,34 @@ def ensure_morning_table(ws) -> list:
     return ws.get_all_values()
 
 
+def is_morning_weather_blocked(ws) -> bool:
+    """Return True if all non-header cells in the morning table are filled with '*'."""
+    try:
+        all_values = ws.get_all_values()
+    except Exception:
+        return False
+
+    header_row_idx = None
+    for r_idx, row in enumerate(all_values):
+        if row and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
+            header_row_idx = r_idx
+            break
+
+    if header_row_idx is None:
+        return False
+
+    data_row_idx = header_row_idx + 1
+    if data_row_idx >= len(all_values):
+        return False
+
+    row = all_values[data_row_idx]
+    data_cells = row[1:]  # skip the time window cell
+    if not data_cells:
+        return False
+
+    return all(cell.strip() == "*" for cell in data_cells)
+
+
 def is_weather_blocked_sheet(all_values) -> bool:
     for row_idx in range(1, len(TIME_SLOTS) + 1):
         current_row_data = all_values[row_idx] if row_idx < len(all_values) else []
@@ -945,6 +973,11 @@ async def process_morning(callback: types.CallbackQuery, state: FSMContext):
         try:
             ws = get_or_create_sheet(selected_date)
             ensure_morning_table(ws)
+            if is_morning_weather_blocked(ws):
+                await callback.message.edit_text("На цю дату не плануємо ранковий сплав")
+                await state.clear()
+                await callback.answer()
+                return
         except Exception:
             pass
 
