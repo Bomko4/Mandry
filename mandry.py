@@ -327,38 +327,19 @@ def get_target_columns_for_names(names: list[str]) -> list[int]:
 
 def find_free_column_for_duration(all_values, row_idx: int, duration: int, target_cols: list[int]):
     for col in target_cols:
-        is_block_free = True
-        for offset in range(duration):
-            current_row_idx = row_idx + offset
-            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
-            if col - 1 < len(current_row_data) and current_row_data[col - 1].strip():
-                is_block_free = False
-                break
-
-        if is_block_free:
+        if _col_status(all_values, row_idx, duration, col) == "free":
             return col
-
     return None
 
 
 def find_free_columns_for_duration(all_values, row_idx: int, duration: int, target_cols: list[int], quantity: int) -> list[int]:
     free_cols = []
-
     for col in target_cols:
-        is_block_free = True
-        for offset in range(duration):
-            current_row_idx = row_idx + offset
-            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
-            if col - 1 < len(current_row_data) and current_row_data[col - 1].strip():
-                is_block_free = False
-                break
-
-        if is_block_free:
+        if _col_status(all_values, row_idx, duration, col) == "free":
             free_cols.append(col)
             if len(free_cols) >= quantity:
                 return free_cols
-
-    return []
+    return free_cols
 
 
 def build_time_window(start_index: int, duration: int) -> str:
@@ -588,49 +569,63 @@ def resolve_equipment_booking(requested_equipment: str, all_values, row_idx: int
 
     return None
 
-def get_non_dash_columns(all_values, row_idx: int, duration: int, target_cols: list[int]) -> list[int]:
-    non_dash_cols = []
+def _get_cell(all_values, row_idx: int, col: int) -> str:
+    """Return stripped cell value (1-based row_idx, 1-based col)."""
+    row = all_values[row_idx - 1] if row_idx - 1 < len(all_values) else []
+    return row[col - 1].strip() if col - 1 < len(row) else ""
 
-    for col in target_cols:
-        has_dash = False
-        for offset in range(duration):
-            current_row_idx = row_idx + offset
-            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
-            cell_value = current_row_data[col - 1].strip() if col - 1 < len(current_row_data) else ""
-            if cell_value == "-":
-                has_dash = True
-                break
-        if not has_dash:
-            non_dash_cols.append(col)
 
-    return non_dash_cols
+def _col_status(all_values, row_idx: int, duration: int, col: int) -> str:
+    """Classify a column block as 'free', 'dash', 'star', or 'booked'.
 
-def are_all_non_dash_columns_occupied(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
-    non_dash_cols = get_non_dash_columns(all_values, row_idx, duration, target_cols)
+    Rules (checked across all rows in the duration block):
+    - If any row has '-'  → 'dash'   (live-queue reserved)
+    - If any row has '*'  → 'star'   (closed)
+    - If any row is non-empty (and not '-'/'*') → 'booked'
+    - All rows empty → 'free'
+    """
+    has_dash = has_star = has_booking = False
+    for offset in range(duration):
+        v = _get_cell(all_values, row_idx + offset, col)
+        if v == "-":
+            has_dash = True
+        elif v == "*":
+            has_star = True
+        elif v:
+            has_booking = True
 
-    if not non_dash_cols:
-        return True
+    if has_dash:
+        return "dash"
+    if has_star:
+        return "star"
+    if has_booking:
+        return "booked"
+    return "free"
 
-    for col in non_dash_cols:
-        is_column_occupied = True
-        for offset in range(duration):
-            current_row_idx = row_idx + offset
-            current_row_data = all_values[current_row_idx - 1] if current_row_idx - 1 < len(all_values) else []
-            cell_value = current_row_data[col - 1].strip() if col - 1 < len(current_row_data) else ""
-            if not cell_value:
-                is_column_occupied = False
-                break
-        if not is_column_occupied:
-            return False
 
-    return True
+def is_weather_blocked_slot(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
+    """True when every target column in the block is '*'."""
+    if not target_cols:
+        return False
+    return all(_col_status(all_values, row_idx, duration, col) == "star" for col in target_cols)
 
 
 def is_live_queue_only_slot(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
+    """True when no column is 'free' and at least one is 'dash' (or all are booked/dash mix)."""
     if not target_cols:
         return False
-    non_dash_cols = get_non_dash_columns(all_values, row_idx, duration, target_cols)
-    return are_all_non_dash_columns_occupied(all_values, row_idx, duration, target_cols)
+    statuses = [_col_status(all_values, row_idx, duration, col) for col in target_cols]
+    has_free = any(s == "free" for s in statuses)
+    has_dash = any(s == "dash" for s in statuses)
+    return not has_free and has_dash
+
+
+def are_all_non_dash_columns_occupied(all_values, row_idx: int, duration: int, target_cols: list[int]) -> bool:
+    """True when no column is 'free' (all are booked/dash/star)."""
+    if not target_cols:
+        return True
+    statuses = [_col_status(all_values, row_idx, duration, col) for col in target_cols]
+    return not any(s == "free" for s in statuses)
 
 def get_or_create_sheet(date_str):
     try:
@@ -710,11 +705,11 @@ def is_morning_weather_blocked(ws) -> bool:
 
 
 def is_weather_blocked_sheet(all_values) -> bool:
-    for row_idx in range(1, len(TIME_SLOTS) + 1):
-        current_row_data = all_values[row_idx] if row_idx < len(all_values) else []
-        for col_idx in range(1, len(COLUMNS) + 1):
-            cell_value = current_row_data[col_idx] if col_idx < len(current_row_data) else ""
-            if cell_value.strip() != "*":
+    all_cols = list(range(2, len(COLUMNS) + 2))  # columns B onwards (1-based)
+    for row_idx in range(2, len(TIME_SLOTS) + 2):  # rows 2..10
+        for col in all_cols:
+            v = _get_cell(all_values, row_idx, col)
+            if v != "*":
                 return False
     return True
 
@@ -938,7 +933,7 @@ async def process_date(callback: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="1 година", callback_data="dur_1"))
     builder.row(types.InlineKeyboardButton(text="2 години", callback_data="dur_2"))
-    builder.row(types.InlineKeyboardButton(text="Світанок на сапах", callback_data="morning"))
+    builder.row(types.InlineKeyboardButton(text="Ранковий сплав", callback_data="morning"))
 
     await callback.message.edit_text("Скільки часу хочете плавати?", reply_markup=builder.as_markup())
     await state.set_state(Booking.duration)
@@ -1037,6 +1032,10 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
         row_idx = start_index + 2
         window_label = build_time_window(start_index, duration)
 
+        # Skip weather-blocked (*) slots entirely — don't show them
+        if is_weather_blocked_slot(all_values, row_idx, duration, target_cols):
+            continue
+
         if is_live_queue_only_slot(all_values, row_idx, duration, target_cols):
             builder.row(types.InlineKeyboardButton(text=window_label, callback_data=f"tmidx_{start_index}"))
             visible_slots += 1
@@ -1048,19 +1047,22 @@ async def process_equip(callback: types.CallbackQuery, state: FSMContext):
             visible_slots += 1
 
     if visible_slots == 0:
-        all_occupied = False
+        # Determine why: all slots are dash-only (live queue) or simply all gone
+        has_live_queue = False
         for start_index in range(max_start_index + 1):
             start_time_str = TIME_SLOTS[start_index].split('-')[0]
             start_time = datetime.strptime(start_time_str, "%H:%M").time()
             if selected_date == today_str and start_time <= now_time:
                 continue
-
             row_idx = start_index + 2
-            if are_all_non_dash_columns_occupied(all_values, row_idx, duration, target_cols):
-                all_occupied = True
-                break
+            if not is_weather_blocked_slot(all_values, row_idx, duration, target_cols) and \
+               are_all_non_dash_columns_occupied(all_values, row_idx, duration, target_cols):
+                statuses = [_col_status(all_values, row_idx, duration, col) for col in target_cols]
+                if any(s == "dash" for s in statuses):
+                    has_live_queue = True
+                    break
 
-        if all_occupied:
+        if has_live_queue:
             await callback.message.edit_text("На жаль, бронювання вже недоступне — наразі працюємо лише в форматі живої черги.\nБудемо раді бачити вас на сплаві!🏄‍♂️")
         else:
             await callback.message.edit_text("На сьогодні вільні часові слоти вже завершилися. Оберіть іншу дату.")
@@ -1128,8 +1130,8 @@ async def process_quantity(callback: types.CallbackQuery, state: FSMContext):
         return
 
     data = await state.get_data()
-    requested_equipment = data.get('resolved_equipment', data.get('equipment'))
-    if not requested_equipment or not requested_equipment.startswith("sup_"):
+    original_equipment = data.get('equipment')
+    if not original_equipment or not original_equipment.startswith("sup_"):
         await callback.answer("❌ Цей крок доступний лише для сапів", show_alert=True)
         return
 
@@ -1149,14 +1151,25 @@ async def process_quantity(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("❌ Не вдалося знайти ранкову таблицю", show_alert=True)
             return
 
-        # Single fixed morning row (offset 0)
         row_idx = header_row_idx + 1 + 1
     else:
         row_idx = int(data.get('time_row', 0))
 
     duration = int(data.get('duration', 1)) if not data.get('morning') else 1
-    target_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS[requested_equipment])
-    free_cols = find_free_columns_for_duration(all_values, row_idx, duration, target_cols, quantity)
+
+    # Collect free columns: prefer the originally-requested type, fill remainder from the other
+    single_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS["sup_single"])
+    double_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS["sup_double"])
+
+    if original_equipment == "sup_single":
+        primary_cols, fallback_cols = single_cols, double_cols
+    else:
+        primary_cols, fallback_cols = double_cols, single_cols
+
+    free_primary = find_free_columns_for_duration(all_values, row_idx, duration, primary_cols, quantity)
+    needed = quantity - len(free_primary)
+    free_fallback = find_free_columns_for_duration(all_values, row_idx, duration, fallback_cols, needed) if needed > 0 else []
+    free_cols = free_primary + free_fallback
 
     if len(free_cols) < quantity:
         await callback.answer("❌ На цей час немає достатньої кількості вільних сапів", show_alert=True)
