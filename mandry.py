@@ -373,7 +373,43 @@ def cancel_morning_finalization_task(date_str: str):
         task.cancel()
 
 
-def get_morning_booking_codes(ws) -> set[str]:
+# Maps date_str -> set of chat_ids that booked morning rafting
+morning_booking_chat_ids: dict[str, set[int]] = {}
+
+
+def count_morning_booked_slots(ws) -> int:
+    """Count total occupied (non-empty, non-dash, non-star) cells in the morning data row."""
+    try:
+        all_values = ws.get_all_values()
+    except Exception:
+        return 0
+
+    header_row_idx = None
+    for r_idx, row in enumerate(all_values):
+        if row and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
+            header_row_idx = r_idx
+            break
+
+    if header_row_idx is None:
+        return 0
+
+    data_row_idx = header_row_idx + 1
+    if data_row_idx >= len(all_values):
+        return 0
+
+    count = 0
+    for cell in all_values[data_row_idx][1:]:
+        v = cell.strip()
+        if v and v not in ("-", "*"):
+            count += 1
+    return count
+
+
+def is_morning_confirmed(ws) -> bool:
+    """True if 6 or more slots are booked in the morning table."""
+    return count_morning_booked_slots(ws) >= 6
+
+
     """Return all unique booking codes found in the morning table rows."""
     try:
         all_values = ws.get_all_values()
@@ -410,47 +446,32 @@ async def finalize_morning_booking_if_needed(date_str: str):
     ws = get_or_create_sheet(date_str)
     ensure_morning_table(ws)
 
-    codes = get_morning_booking_codes(ws)
-    total_bookings = len(codes)
+    booked_slots = count_morning_booked_slots(ws)
 
-    if total_bookings >= 6:
+    if booked_slots >= 6:
+        # Enough people — confirm to all registered chat_ids
+        chat_ids = morning_booking_chat_ids.get(date_str, set())
+        confirm_message = (
+            f"✅ Ранковий сплав на {date_str} відбудеться! Набралося достатньо учасників.\n"
+            "Чекаємо вас о 05:45!"
+        )
+        for chat_id in chat_ids:
+            try:
+                await bot.send_message(chat_id=chat_id, text=confirm_message)
+            except Exception:
+                pass
         return
 
-    if not codes:
+    # Less than 6 — notify but DO NOT delete bookings
+    chat_ids = morning_booking_chat_ids.get(date_str, set())
+    if not chat_ids:
         return
-
-    # Collect chat_ids from cells before clearing
-    unique_chat_ids: set[int] = set()
-    try:
-        all_values = ws.get_all_values()
-        header_row_idx = None
-        for r_idx, row in enumerate(all_values):
-            if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
-                header_row_idx = r_idx
-                break
-        if header_row_idx is not None:
-            row_idx = header_row_idx + 1
-            if row_idx < len(all_values):
-                for cell in all_values[row_idx][1:]:
-                    for line in cell.splitlines():
-                        line = line.strip()
-                        if line.startswith("CHAT:"):
-                            chat_id_raw = line[5:].strip()
-                            if chat_id_raw.lstrip("-").isdigit():
-                                unique_chat_ids.add(int(chat_id_raw))
-    except Exception:
-        pass
-
-    for booking_code in list(codes):
-        cancel_reminder_task(booking_code)
-        find_and_clear_booking_by_code(booking_code)
 
     cancel_message = (
-        f"❌ Ранковий сплав на {date_str} не відбудеться, бо до 19:00 не назбиралося 6 людей.\n"
-        "Ми зв'яжемося з вами, якщо потрібно буде оформити нове бронювання."
+        f"⚠️ Ранковий сплав на {date_str}: до 19:00 не набралося 6 учасників ({booked_slots} з 6).\n"
+        "Бронювання залишається, але сплав може не відбутися. Ми зв'яжемося з вами для підтвердження."
     )
-
-    for chat_id in unique_chat_ids:
+    for chat_id in chat_ids:
         try:
             await bot.send_message(chat_id=chat_id, text=cancel_message)
         except Exception:
@@ -630,18 +651,18 @@ def are_all_non_dash_columns_occupied(all_values, row_idx: int, duration: int, t
 def get_or_create_sheet(date_str):
     try:
         ws = sh.worksheet(date_str)
-        existing_values = ws.col_values(1)
+        # Read only the first 10 rows of column A (header + 9 time slots).
+        # Reading the full column would include morning table rows which must not be touched here.
+        existing_col_a = ws.col_values(1)[:len(TIME_SLOTS) + 1]
         for index, slot in enumerate(TIME_SLOTS, start=2):
-            current_value = existing_values[index - 1].strip() if len(existing_values) >= index else ""
+            current_value = existing_col_a[index - 1].strip() if len(existing_col_a) >= index else ""
             if current_value != slot:
                 ws.update(gspread.utils.rowcol_to_a1(index, 1), [[slot]])
         return ws
     except gspread.exceptions.WorksheetNotFound:
         new_ws = sh.add_worksheet(title=date_str, rows="100", cols="30")
-
         headers = ["ВІКНО"] + COLUMNS
         new_ws.update('A1', [headers])
-
         time_col = [[t] for t in TIME_SLOTS]
         end_row = 1 + len(TIME_SLOTS)
         new_ws.update(f'A2:A{end_row}', time_col)
@@ -652,27 +673,49 @@ def get_or_create_sheet(date_str):
 def ensure_morning_table(ws) -> list:
     all_vals = ws.get_all_values()
 
-    header_row_idx = None
-    for r_idx, row in enumerate(all_vals):
-        if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
-            header_row_idx = r_idx
-            break
+    # Find ALL morning header rows (to detect duplicates)
+    header_rows = [
+        r_idx for r_idx, row in enumerate(all_vals)
+        if row and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков")
+    ]
 
-    if header_row_idx is not None:
-        # Verify single data row has correct window
-        target_row_idx = header_row_idx + 1 + 1  # header + 1 offset (0-based) + 1 for 1-based
-        if target_row_idx <= len(all_vals):
-            current_value = all_vals[target_row_idx - 1][0].strip() if all_vals[target_row_idx - 1] else ""
+    # Remove duplicate morning tables (keep only the first)
+    if len(header_rows) > 1:
+        rows_to_delete = []
+        for dup_header_idx in header_rows[1:]:
+            rows_to_delete.append(dup_header_idx + 1)  # 1-based
+            data_row = dup_header_idx + 1
+            if data_row < len(all_vals):
+                rows_to_delete.append(data_row + 1)  # 1-based
+        # Delete from bottom up to preserve row indices
+        for row_1based in sorted(set(rows_to_delete), reverse=True):
+            try:
+                ws.delete_rows(row_1based)
+            except Exception:
+                pass
+        all_vals = ws.get_all_values()
+        header_rows = [header_rows[0]]
+
+    if header_rows:
+        header_row_idx = header_rows[0]
+        # data row is immediately after header (0-based idx → 1-based = +1, then +1 for the next row)
+        data_row_1based = header_row_idx + 2
+        if data_row_1based <= len(all_vals):
+            current_value = all_vals[data_row_1based - 1][0].strip() if all_vals[data_row_1based - 1] else ""
             if current_value != MORNING_WINDOW:
-                ws.update(gspread.utils.rowcol_to_a1(target_row_idx, 1), [[MORNING_WINDOW]])
+                ws.update(gspread.utils.rowcol_to_a1(data_row_1based, 1), [[MORNING_WINDOW]])
                 return ws.get_all_values()
+        else:
+            # Data row missing — append it
+            ws.append_rows([[MORNING_WINDOW] + ["" for _ in COLUMNS]])
+            return ws.get_all_values()
         return all_vals
 
-    rows_to_append = [
+    # No morning table at all — append both rows at once
+    ws.append_rows([
         ["Ранковий сплав"] + COLUMNS,
         [MORNING_WINDOW] + ["" for _ in COLUMNS],
-    ]
-    ws.append_rows(rows_to_append)
+    ])
     return ws.get_all_values()
 
 
@@ -956,25 +999,31 @@ async def process_duration(callback: types.CallbackQuery, state: FSMContext):
 async def process_morning(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selected_date = data.get('date')
-    if selected_date and get_current_time() >= get_morning_booking_deadline(selected_date):
-        await callback.message.edit_text(
-            "Ранковий сплав на цю дату вже недоступний. Бронювання закривається о 19:00 напередодні."
-        )
-        await state.clear()
-        await callback.answer()
-        return
 
     if selected_date:
         try:
             ws = get_or_create_sheet(selected_date)
             ensure_morning_table(ws)
+
             if is_morning_weather_blocked(ws):
                 await callback.message.edit_text("На цю дату не плануємо ранковий сплав")
                 await state.clear()
                 await callback.answer()
                 return
+
+            confirmed = is_morning_confirmed(ws)
         except Exception:
-            pass
+            confirmed = False
+
+        past_deadline = get_current_time() >= get_morning_booking_deadline(selected_date)
+
+        if past_deadline and not confirmed:
+            await callback.message.edit_text(
+                "Ранковий сплав на цю дату недоступний: до 19:00 не набралося 6 учасників."
+            )
+            await state.clear()
+            await callback.answer()
+            return
 
     await state.update_data(morning=True)
 
@@ -1293,6 +1342,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     )
 
     if data.get('morning'):
+        morning_booking_chat_ids.setdefault(data['date'], set()).add(user_chat_id)
         schedule_morning_finalization(data['date'])
 
     notify_text = (
