@@ -102,6 +102,18 @@ dp = Dispatcher()
 reminder_tasks: dict[str, asyncio.Task] = {}
 morning_finalization_tasks: dict[str, asyncio.Task] = {}
 
+# One lock per date-sheet to serialize structural writes (sheet repair, morning table
+# creation, booking writes) and prevent duplicate rows / column collisions under load.
+sheet_locks: dict[str, asyncio.Lock] = {}
+
+
+def get_sheet_lock(date_str: str) -> asyncio.Lock:
+    lock = sheet_locks.get(date_str)
+    if lock is None:
+        lock = asyncio.Lock()
+        sheet_locks[date_str] = lock
+    return lock
+
 class Booking(StatesGroup):
     date = State()
     duration = State()
@@ -282,16 +294,34 @@ def is_phone_blacklisted(phone: str) -> bool:
     return False
 
 
+def get_equipment_name_for_column(col: int) -> str:
+    """Map a 1-based sheet column to its equipment column name (col 1 = ВІКНО)."""
+    idx = col - 2
+    if 0 <= idx < len(COLUMNS):
+        return COLUMNS[idx]
+    return "Невідомо"
+
+
 def find_and_clear_booking_by_code(code: str):
     marker = f"ID:{code}"
     updates_by_ws = {}
     booking_name = ""
+    equipment_names: set[str] = set()
+    booking_date = ""
+    booking_time_window = ""
 
     for ws in get_booking_worksheets_from_today():
         try:
             values = ws.get_all_values()
         except Exception:
             continue
+
+        # Find morning header row (if any) to detect morning bookings
+        morning_header_row_idx = None
+        for r_idx, row in enumerate(values):
+            if row and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
+                morning_header_row_idx = r_idx
+                break
 
         updates_for_this_ws = []
         for r_idx, row in enumerate(values, start=1):
@@ -303,6 +333,20 @@ def find_and_clear_booking_by_code(code: str):
                             booking_name = lines[1].strip()
                         elif "|" in cell:
                             booking_name = cell.split("|", 1)[1].strip()
+
+                    equipment_names.add(get_equipment_name_for_column(c_idx))
+
+                    if not booking_date:
+                        booking_date = ws.title
+
+                    if not booking_time_window:
+                        if morning_header_row_idx is not None and r_idx == morning_header_row_idx + 2:
+                            booking_time_window = MORNING_WINDOW
+                        else:
+                            row_time_value = values[r_idx - 1][0].strip() if r_idx - 1 < len(values) else ""
+                            if row_time_value and row_time_value != "Ранковий сплав":
+                                booking_time_window = row_time_value
+
                     updates_for_this_ws.append((r_idx, c_idx))
 
         if updates_for_this_ws:
@@ -318,7 +362,7 @@ def find_and_clear_booking_by_code(code: str):
         except Exception:
             pass
 
-    return total_cleared, booking_name
+    return total_cleared, booking_name, ", ".join(sorted(equipment_names)), booking_date, booking_time_window
 
 
 def get_target_columns_for_names(names: list[str]) -> list[int]:
@@ -408,38 +452,6 @@ def count_morning_booked_slots(ws) -> int:
 def is_morning_confirmed(ws) -> bool:
     """True if 6 or more slots are booked in the morning table."""
     return count_morning_booked_slots(ws) >= 6
-
-
-    """Return all unique booking codes found in the morning table rows."""
-    try:
-        all_values = ws.get_all_values()
-    except Exception:
-        return set()
-
-    header_row_idx = None
-    for r_idx, row in enumerate(all_values):
-        if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
-            header_row_idx = r_idx
-            break
-
-    if header_row_idx is None:
-        return set()
-
-    codes: set[str] = set()
-    # Morning table has 1 row (single window), header + 1 data row
-    row_idx = header_row_idx + 1
-    if row_idx < len(all_values):
-        row = all_values[row_idx]
-        for cell in row[1:]:
-            if not cell:
-                continue
-            for line in cell.splitlines():
-                line = line.strip()
-                if line.startswith("ID:"):
-                    code = line[3:].strip()
-                    if code:
-                        codes.add(code)
-    return codes
 
 
 async def finalize_morning_booking_if_needed(date_str: str):
@@ -660,6 +672,12 @@ def get_or_create_sheet(date_str):
                 ws.update(gspread.utils.rowcol_to_a1(index, 1), [[slot]])
         return ws
     except gspread.exceptions.WorksheetNotFound:
+        # Re-check after acquiring intent to create — another concurrent call may have
+        # already created it while we were checking.
+        try:
+            return sh.worksheet(date_str)
+        except gspread.exceptions.WorksheetNotFound:
+            pass
         new_ws = sh.add_worksheet(title=date_str, rows="100", cols="30")
         headers = ["ВІКНО"] + COLUMNS
         new_ws.update('A1', [headers])
@@ -894,7 +912,7 @@ async def process_cancel_booking(message: types.Message, state: FSMContext):
 
     await message.answer("Відбувається процес скасування!\nДякуємо за очікування💙")
 
-    cleared_count, booking_name = find_and_clear_booking_by_code(code)
+    cleared_count, booking_name, equipment_names, booking_date, booking_time_window = find_and_clear_booking_by_code(code)
     if cleared_count == 0:
         await message.answer("❌ Бронювання з таким номером не знайдено.")
         await state.clear()
@@ -902,11 +920,16 @@ async def process_cancel_booking(message: types.Message, state: FSMContext):
 
     cancel_reminder_task(code)
 
+    cancellation_dt = get_current_time().strftime("%d.%m.%Y %H:%M")
     cancel_notify = (
         "Скасування бронювання!\n"
         f"Код: {code}\n"
         f"Клієнт: {booking_name if booking_name else 'Невідомо'}\n"
-        f"Очищено слотів: {cleared_count}"
+        f"Дата бронювання: {booking_date if booking_date else 'Невідомо'}\n"
+        f"Час бронювання: {booking_time_window if booking_time_window else 'Невідомо'}\n"
+        f"Обладнання: {equipment_names if equipment_names else 'Невідомо'}\n"
+        f"Очищено слотів: {cleared_count}\n"
+        f"Скасовано: {cancellation_dt}"
     )
     if STAFF_CHAT_ID is not None:
         try:
@@ -931,7 +954,7 @@ async def process_reminder_yes(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("rem_no_"))
 async def process_reminder_no(callback: types.CallbackQuery):
     code = callback.data.split("_", 2)[2]
-    cleared_count, _ = find_and_clear_booking_by_code(code)
+    cleared_count, booking_name, equipment_names, booking_date, booking_time_window = find_and_clear_booking_by_code(code)
     cancel_reminder_task(code)
 
     if cleared_count == 0:
@@ -939,6 +962,7 @@ async def process_reminder_no(callback: types.CallbackQuery):
         await callback.answer()
         return
 
+    cancellation_dt = get_current_time().strftime("%d.%m.%Y %H:%M")
     if STAFF_CHAT_ID is not None:
         try:
             print(f"[INFO] Надсилаємо повідомлення про скасування з нагадування в чат {STAFF_CHAT_ID}")
@@ -947,7 +971,12 @@ async def process_reminder_no(callback: types.CallbackQuery):
                 text=(
                     "Скасування з нагадування!\n"
                     f"Код: {code}\n"
-                    "Клієнт натиснув: Ні, передумав"
+                    f"Клієнт: {booking_name if booking_name else 'Невідомо'}\n"
+                    f"Дата бронювання: {booking_date if booking_date else 'Невідомо'}\n"
+                    f"Час бронювання: {booking_time_window if booking_time_window else 'Невідомо'}\n"
+                    f"Обладнання: {equipment_names if equipment_names else 'Невідомо'}\n"
+                    "Клієнт натиснув: Ні, передумав\n"
+                    f"Скасовано: {cancellation_dt}"
                 ),
             )
             print(f"[INFO] Повідомлення про скасування з нагадування успішно надіслано")
@@ -1279,55 +1308,77 @@ async def process_phone(message: types.Message, state: FSMContext):
         booking_window = MORNING_WINDOW
         actual_equipment = EQUIPMENT_LABELS.get(data.get('equipment'), data.get('equipment'))
 
-        all_vals = ensure_morning_table(ws)
+        async with get_sheet_lock(data['date']):
+            all_vals = ensure_morning_table(ws)
 
-        header_row_idx = None
-        for r_idx, row in enumerate(all_vals):
-            if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
-                header_row_idx = r_idx
-                break
+            header_row_idx = None
+            for r_idx, row in enumerate(all_vals):
+                if row and len(row) > 0 and isinstance(row[0], str) and row[0].strip().lower().startswith("ранков"):
+                    header_row_idx = r_idx
+                    break
 
-        if header_row_idx is None:
-            await message.answer("❌ Сталася помилка структури таблиці. Спробуйте ще раз або зверніться до адміністратора.")
-            await state.clear()
-            return
+            if header_row_idx is None:
+                await message.answer("❌ Сталася помилка структури таблиці. Спробуйте ще раз або зверніться до адміністратора.")
+                await state.clear()
+                return
 
-        write_row = header_row_idx + 2  # header row + 1 data row (1-based)
+            write_row = header_row_idx + 2  # header row + 1 data row (1-based)
 
-        requested_equipment = data.get('equipment')
-        target_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS[requested_equipment])
+            requested_equipment = data.get('equipment')
+            target_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS[requested_equipment])
 
-        free_cols = find_free_columns_for_duration(all_vals, write_row, 1, target_cols, quantity)
+            free_cols = find_free_columns_for_duration(all_vals, write_row, 1, target_cols, quantity)
 
-        if len(free_cols) < quantity:
-            await message.answer("❌ Не вдалося зафіксувати бронювання: недостатньо вільних сапів на цей час.")
-            await state.clear()
-            return
+            if len(free_cols) < quantity:
+                await message.answer("❌ Не вдалося зафіксувати бронювання: недостатньо вільних сапів на цей час.")
+                await state.clear()
+                return
 
-        for col in free_cols:
-            start_cell = gspread.utils.rowcol_to_a1(write_row, col)
-            ws.update(start_cell, [[booking_value]])
+            for col in free_cols:
+                start_cell = gspread.utils.rowcol_to_a1(write_row, col)
+                ws.update(start_cell, [[booking_value]])
 
         duration = 1
 
     # --- ЗВИЧАЙНИЙ СПЛАВ ---
     else:
-        if quantity > 1:
-            equip_cols = data.get('equip_cols', [])
-            if len(equip_cols) < quantity:
-                await message.answer("❌ Не вдалося зафіксувати бронювання: недостатньо вільних сапів на цей час.")
-                await state.clear()
-                return
+        async with get_sheet_lock(data['date']):
+            # Re-check availability under the lock to avoid races overwriting another booking
+            fresh_values = ws.get_all_values()
+            if quantity > 1:
+                requested_equipment = data.get('resolved_equipment', data.get('equipment'))
+                preferred_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS.get(requested_equipment, []))
+                single_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS["sup_single"])
+                double_cols = get_target_columns_for_names(EQUIPMENT_COLUMN_GROUPS["sup_double"])
+                original_equipment = data.get('equipment')
+                if original_equipment == "sup_single":
+                    primary_cols, fallback_cols = single_cols, double_cols
+                else:
+                    primary_cols, fallback_cols = double_cols, single_cols
 
-            for row_offset in range(duration):
-                row_idx = data['time_row'] + row_offset
-                for col in equip_cols:
-                    start_cell = gspread.utils.rowcol_to_a1(row_idx, col)
-                    ws.update(start_cell, [[booking_value]])
-        else:
-            start_cell = gspread.utils.rowcol_to_a1(data['time_row'], data['equip_col'])
-            end_cell = gspread.utils.rowcol_to_a1(data['time_row'] + duration - 1, data['equip_col'])
-            ws.update(f"{start_cell}:{end_cell}", [[booking_value] for _ in range(duration)])
+                free_primary = find_free_columns_for_duration(fresh_values, data['time_row'], duration, primary_cols, quantity)
+                needed = quantity - len(free_primary)
+                free_fallback = find_free_columns_for_duration(fresh_values, data['time_row'], duration, fallback_cols, needed) if needed > 0 else []
+                equip_cols = free_primary + free_fallback
+
+                if len(equip_cols) < quantity:
+                    await message.answer("❌ Не вдалося зафіксувати бронювання: недостатньо вільних сапів на цей час.")
+                    await state.clear()
+                    return
+
+                for row_offset in range(duration):
+                    row_idx = data['time_row'] + row_offset
+                    for col in equip_cols:
+                        start_cell = gspread.utils.rowcol_to_a1(row_idx, col)
+                        ws.update(start_cell, [[booking_value]])
+            else:
+                if _col_status(fresh_values, data['time_row'], duration, data['equip_col']) != "free":
+                    await message.answer("❌ На жаль, це місце вже зайняли. Спробуйте інший час або обладнання.")
+                    await state.clear()
+                    return
+                start_cell = gspread.utils.rowcol_to_a1(data['time_row'], data['equip_col'])
+                end_cell = gspread.utils.rowcol_to_a1(data['time_row'] + duration - 1, data['equip_col'])
+                ws.update(f"{start_cell}:{end_cell}", [[booking_value] for _ in range(duration)])
 
         start_slot_index = data['time_row'] - 2
         booking_window = build_time_window(start_slot_index, duration)
