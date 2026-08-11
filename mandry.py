@@ -780,7 +780,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     reply_keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
-            [types.KeyboardButton(text="📚 Забронювати"), types.KeyboardButton(text="❌ Скасувати бронювання")],
+            [types.KeyboardButton(text="📚 Бронювання (новий бот)", url="https://t.me/MandryBooking2_bot")],
             [types.KeyboardButton(text="📋 Правила користування"), types.KeyboardButton(text="🚨 Краш ліст")],
             [types.KeyboardButton(text="🍽️ Меню")],
             [types.KeyboardButton(text="📞 Контакти")]
@@ -790,23 +790,24 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     await message.answer("Головне меню:", reply_markup=reply_keyboard)
 
-@dp.message(F.text == "📚 Забронювати")
-async def start_booking_from_menu(message: types.Message, state: FSMContext):
-    builder = InlineKeyboardBuilder()
-    now = get_current_time()
-    left_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(7)]
-    right_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(7, 14)]
-
-    for left_date, right_date in zip(left_column_dates, right_column_dates):
-        builder.row(
-            types.InlineKeyboardButton(text=left_date, callback_data=f"date_{left_date}"),
-            types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
-        )
-
-    builder.row(types.InlineKeyboardButton(text="➡️", callback_data="dates_next"))
-
-    await message.answer("Оберіть дату:", reply_markup=builder.as_markup())
-    await state.set_state(Booking.date)
+## Disabled booking entrypoint (old bot). Use the new bot link instead.
+##@dp.message(F.text == "📚 Забронювати")
+##async def start_booking_from_menu(message: types.Message, state: FSMContext):
+##    builder = InlineKeyboardBuilder()
+##    now = get_current_time()
+##    left_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(7)]
+##    right_column_dates = [(now + timedelta(days=day_offset)).strftime("%d.%m") for day_offset in range(7, 14)]
+##
+##    for left_date, right_date in zip(left_column_dates, right_column_dates):
+##        builder.row(
+##            types.InlineKeyboardButton(text=left_date, callback_data=f"date_{left_date}"),
+##            types.InlineKeyboardButton(text=right_date, callback_data=f"date_{right_date}"),
+##        )
+##
+##    builder.row(types.InlineKeyboardButton(text="➡️", callback_data="dates_next"))
+##
+##    await message.answer("Оберіть дату:", reply_markup=builder.as_markup())
+##    await state.set_state(Booking.date)
 
 
 @dp.callback_query(F.data == "dates_next")
@@ -853,10 +854,11 @@ async def show_prices(message: types.Message):
     await message.answer("Натисніть кнопку нижче, щоб відкрити меню:", reply_markup=builder.as_markup())
 
 
-@dp.message(F.text == "❌ Скасувати бронювання")
-async def start_cancel_booking(message: types.Message, state: FSMContext):
-    await state.set_state(Booking.cancel_code)
-    await message.answer("Введіть 5-значний номер бронювання для скасування:")
+## Disabled cancel entrypoint (old bot).
+##@dp.message(F.text == "❌ Скасувати бронювання")
+##async def start_cancel_booking(message: types.Message, state: FSMContext):
+##    await state.set_state(Booking.cancel_code)
+##    await message.answer("Введіть 5-значний номер бронювання для скасування:")
 
 @dp.message(F.text == "📞 Контакти")
 async def show_contacts(message: types.Message):
@@ -903,46 +905,47 @@ async def show_crash_list(message: types.Message):
     )
     await message.answer(crash_list_text, parse_mode="HTML")
 
-@dp.message(Booking.cancel_code)
-async def process_cancel_booking(message: types.Message, state: FSMContext):
-    code = message.text.strip()
-    if not (code.isdigit() and len(code) == 5):
-        await message.answer("Невірний формат. Введіть саме 5 цифр, наприклад: 04231")
-        return
-
-    await message.answer("Відбувається процес скасування!\nДякуємо за очікування💙")
-
-    cleared_count, booking_name, equipment_names, booking_date, booking_time_window = find_and_clear_booking_by_code(code)
-    if cleared_count == 0:
-        await message.answer("❌ Бронювання з таким номером не знайдено.")
-        await state.clear()
-        return
-
-    cancel_reminder_task(code)
-
-    cancellation_dt = get_current_time().strftime("%d.%m.%Y %H:%M")
-    cancel_notify = (
-        "Скасування бронювання!\n"
-        f"Код: {code}\n"
-        f"Клієнт: {booking_name if booking_name else 'Невідомо'}\n"
-        f"Дата бронювання: {booking_date if booking_date else 'Невідомо'}\n"
-        f"Час бронювання: {booking_time_window if booking_time_window else 'Невідомо'}\n"
-        f"Обладнання: {equipment_names if equipment_names else 'Невідомо'}\n"
-        f"Очищено слотів: {cleared_count}\n"
-        f"Скасовано: {cancellation_dt}"
-    )
-    if STAFF_CHAT_ID is not None:
-        try:
-            print(f"[INFO] Надсилаємо повідомлення про скасування в чат {STAFF_CHAT_ID}")
-            await bot.send_message(chat_id=STAFF_CHAT_ID, text=cancel_notify)
-            print(f"[INFO] Повідомлення про скасування успішно надіслано")
-        except Exception as e:
-            print(f"[ERROR] Помилка при надсиланні повідомлення про скасування: {e}")
-    else:
-        print("[WARNING] STAFF_CHAT_ID не задано")
-
-    await message.answer(f"✅ Бронювання {code} скасовано.")
-    await state.clear()
+## Disabled cancel processing (old bot).
+##@dp.message(Booking.cancel_code)
+##async def process_cancel_booking(message: types.Message, state: FSMContext):
+##    code = message.text.strip()
+##    if not (code.isdigit() and len(code) == 5):
+##        await message.answer("Невірний формат. Введіть саме 5 цифр, наприклад: 04231")
+##        return
+##
+##    await message.answer("Відбувається процес скасування!\nДякуємо за очікування💙")
+##
+##    cleared_count, booking_name, equipment_names, booking_date, booking_time_window = find_and_clear_booking_by_code(code)
+##    if cleared_count == 0:
+##        await message.answer("❌ Бронювання з таким номером не знайдено.")
+##        await state.clear()
+##        return
+##
+##    cancel_reminder_task(code)
+##
+##    cancellation_dt = get_current_time().strftime("%d.%m.%Y %H:%M")
+##    cancel_notify = (
+##        "Скасування бронювання!\n"
+##        f"Код: {code}\n"
+##        f"Клієнт: {booking_name if booking_name else 'Невідомо'}\n"
+##        f"Дата бронювання: {booking_date if booking_date else 'Невідомо'}\n"
+##        f"Час бронювання: {booking_time_window if booking_time_window else 'Невідомо'}\n"
+##        f"Обладнання: {equipment_names if equipment_names else 'Невідомо'}\n"
+##        f"Очищено слотів: {cleared_count}\n"
+##        f"Скасовано: {cancellation_dt}"
+##    )
+##    if STAFF_CHAT_ID is not None:
+##        try:
+##            print(f"[INFO] Надсилаємо повідомлення про скасування в чат {STAFF_CHAT_ID}")
+##            await bot.send_message(chat_id=STAFF_CHAT_ID, text=cancel_notify)
+##            print(f"[INFO] Повідомлення про скасування успішно надіслано")
+##        except Exception as e:
+##            print(f"[ERROR] Помилка при надсиланні повідомлення про скасування: {e}")
+##    else:
+##        print("[WARNING] STAFF_CHAT_ID не задано")
+##
+##    await message.answer(f"✅ Бронювання {code} скасовано.")
+##    await state.clear()
 
 
 @dp.callback_query(F.data.startswith("rem_yes_"))
@@ -1420,7 +1423,7 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     reply_keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
-            [types.KeyboardButton(text="📚 Забронювати"), types.KeyboardButton(text="❌ Скасувати бронювання")],
+            [types.KeyboardButton(text="📚 Бронювання (новий бот)", url="https://t.me/MandryBooking2_bot")],
             [types.KeyboardButton(text="📋 Правила користування"), types.KeyboardButton(text="🚨 Краш ліст")],
             [types.KeyboardButton(text="🍽️ Меню")],
             [types.KeyboardButton(text="📞 Контакти")]
