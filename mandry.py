@@ -780,7 +780,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
     reply_keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
-            [types.KeyboardButton(text="📚 Бронювання (новий бот)", url="https://t.me/MandryBooking2_bot")],
+            [types.KeyboardButton(text="📚 Забронювати")],
             [types.KeyboardButton(text="📋 Правила користування"), types.KeyboardButton(text="🚨 Краш ліст")],
             [types.KeyboardButton(text="🍽️ Меню")],
             [types.KeyboardButton(text="📞 Контакти")]
@@ -808,6 +808,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
 ##
 ##    await message.answer("Оберіть дату:", reply_markup=builder.as_markup())
 ##    await state.set_state(Booking.date)
+
+
+@dp.message(F.text == "📚 Забронювати")
+async def send_new_bot_link(message: types.Message):
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="Перейти в новий бот", url="https://t.me/MandryBooking2_bot"))
+    await message.answer("Для бронювання перейдіть у новий бот або натисніть кнопку нижче:", reply_markup=builder.as_markup())
 
 
 @dp.callback_query(F.data == "dates_next")
@@ -1423,7 +1430,7 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     reply_keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
-            [types.KeyboardButton(text="📚 Бронювання (новий бот)", url="https://t.me/MandryBooking2_bot")],
+            [types.KeyboardButton(text="📚 Забронювати")],
             [types.KeyboardButton(text="📋 Правила користування"), types.KeyboardButton(text="🚨 Краш ліст")],
             [types.KeyboardButton(text="🍽️ Меню")],
             [types.KeyboardButton(text="📞 Контакти")]
